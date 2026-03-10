@@ -1,0 +1,1 @@
+# codingame-winter-challenge-2026-exotec
