@@ -6,9 +6,10 @@
 CLAUDE.md               # Project instructions
 agent/                  # Arena-ready stdin/stdout bot sources
 cmd/
-└─ match/               # Local match runner for binary-vs-binary simulations
-engine/                 # Match batch runner and summary helpers
-simulator/              # Referee and subprocess player support
+└─ match/               # Tiny CLI entrypoint for local matches
+internal/
+├─ engine/              # Java engine parity port used by the simulator
+└─ match/               # Local binary-vs-binary runner and stats collection
 ```
 
 ## Project Rules
@@ -17,7 +18,6 @@ simulator/              # Referee and subprocess player support
 - Arena bots live in `agent/<name>/main.go`
 - Local matches should use external bot binaries; do not reintroduce in-process agent fallbacks
 - Default local opponent binary is `./bin/opponent`
-
 ```shell
 # go manager
 go install golang.org/dl/go1.18.1@latest
@@ -30,7 +30,8 @@ docker compose run --rm builder go test ./..
 ## Project Commands
 
 ```shell
-env GOCACHE=/tmp/go-build go test ./...
+# GOCACHE is exported in the Makefile, use make targets:
+make test
 
 make build-agent LOGIC=greed
 make build-opponent
@@ -40,6 +41,9 @@ make match LOGIC=greed
 
 # arbitrary binary-vs-binary match
 make match-bin P0=greed P1=opponent
+
+# standalone go commands also work when GOCACHE is set
+env GOCACHE=/tmp/go-build go test ./...
 ```
 
 ## Match Workflow

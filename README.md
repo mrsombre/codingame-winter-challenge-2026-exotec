@@ -11,9 +11,10 @@ See [rules.md](rules.md).
 ```text
 agent/                  # Arena-ready stdin/stdout bot sources
 cmd/
-└─ match/               # Local binary-vs-binary match runner
-engine/                 # Batch execution and summary helpers
-simulator/              # Referee, map generation, subprocess player wiring
+└─ match/               # Tiny CLI entrypoint
+internal/
+├─ engine/              # Java engine parity port used by local simulation
+└─ match/               # Binary-vs-binary runner and batch summaries
 ```
 
 ## Local Workflow

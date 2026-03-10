@@ -1,14 +1,38 @@
 LOGIC ?= basic
 BIN_DIR ?= bin
 
-.PHONY: test build-agent clean
+ENGINE_ARGS ?= --simulations 30 --parallel 5 --seed 50 --output-matches
+GAME_ARGS ?= --max-turns 100
+
+P0 ?= $(LOGIC)
+P1 ?= opponent
+
+export GOCACHE := /private/tmp/claude-501/go-build
+
+.PHONY: test build-agent build-opponent match match-bin clean
 
 test:
-	env GOCACHE=/tmp/go-build go test ./...
+	go test ./...
 
 build-agent:
 	mkdir -p $(BIN_DIR)
-	env GOCACHE=/tmp/go-build go build -o $(BIN_DIR)/$(LOGIC) ./agent/$(LOGIC)
+	go build -o $(BIN_DIR)/$(LOGIC) ./agent/$(LOGIC)
+
+build-opponent:
+	mkdir -p $(BIN_DIR)
+	go build -o $(BIN_DIR)/opponent ./agent/opponent
+
+match: build-agent build-opponent
+	go run ./cmd/match \
+		--p0-bin $(BIN_DIR)/$(LOGIC) \
+		--p1-bin $(BIN_DIR)/opponent \
+		$(ENGINE_ARGS) $(GAME_ARGS)
+
+match-bin:
+	go run ./cmd/match \
+		--p0-bin $(BIN_DIR)/$(P0) \
+		--p1-bin $(BIN_DIR)/$(P1) \
+		$(ENGINE_ARGS) $(GAME_ARGS)
 
 clean:
 	rm -rf $(BIN_DIR)
