@@ -1,4 +1,6 @@
-package engine
+// Package action
+// Source: source/src/main/java/com/codingame/game/action/Action.java
+package action
 
 type Action struct {
 	actionType ActionType

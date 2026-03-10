@@ -17,9 +17,10 @@ const (
 )
 
 type MatchOptions struct {
-	MaxTurns int
-	P0Bin    string
-	P1Bin    string
+	MaxTurns    int
+	LeagueLevel int
+	P0Bin       string
+	P1Bin       string
 }
 
 type Runner struct {
@@ -30,12 +31,15 @@ func NewRunner(options MatchOptions) *Runner {
 	if options.MaxTurns == 0 {
 		options.MaxTurns = engine.MaxTurns
 	}
+	if options.LeagueLevel == 0 {
+		options.LeagueLevel = 4
+	}
 	return &Runner{Options: options}
 }
 
 type MatchResult struct {
 	ID             int
-	Seed           uint64
+	Seed           int64
 	Turns          int
 	Scores         [2]int
 	Losses         [2]int
@@ -93,7 +97,7 @@ func (r MatchResult) RenderMatch() string {
 	)
 }
 
-func (runner *Runner) RunMatch(simulationID int, seed uint64) MatchResult {
+func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 	players := []*engine.Player{
 		engine.NewPlayer(0),
 		engine.NewPlayer(1),
@@ -101,7 +105,7 @@ func (runner *Runner) RunMatch(simulationID int, seed uint64) MatchResult {
 	players[0].SetNicknameToken("Player 0")
 	players[1].SetNicknameToken("Player 1")
 
-	game := engine.NewGame(int64(seed), 4)
+	game := engine.NewGame(seed, runner.Options.LeagueLevel)
 	referee := engine.NewReferee(game, engine.NewCommandManager())
 	referee.Init(players)
 
@@ -195,7 +199,7 @@ func attachCommandPlayers(options MatchOptions, players []*engine.Player) (func(
 	}, nil
 }
 
-func buildMatchResult(simulationID int, seed uint64, turns int, game *engine.Game, players []*engine.Player) MatchResult {
+func buildMatchResult(simulationID int, seed int64, turns int, game *engine.Game, players []*engine.Player) MatchResult {
 	winner := -1
 	if players[0].GetScore() > players[1].GetScore() {
 		winner = 0

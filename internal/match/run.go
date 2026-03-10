@@ -17,10 +17,11 @@ type runnerOutput struct {
 type runnerMetadata struct {
 	Simulations   int     `json:"simulations"`
 	Parallel      int     `json:"parallel"`
-	Seed          uint64  `json:"seed"`
-	SeedIncrement *uint64 `json:"seed_increment,omitempty"`
+	Seed          int64   `json:"seed"`
+	SeedIncrement *int64  `json:"seed_increment,omitempty"`
 	OutputMatches bool    `json:"output_matches"`
 	MaxTurns      int     `json:"max_turns"`
+	LeagueLevel   int     `json:"league_level"`
 }
 
 func Run(args []string, stdout io.Writer) error {
@@ -35,9 +36,10 @@ func Run(args []string, stdout io.Writer) error {
 	}
 
 	runner := NewRunner(MatchOptions{
-		MaxTurns: parsed.MaxTurns,
-		P0Bin:    parsed.P0Bin,
-		P1Bin:    parsed.P1Bin,
+		MaxTurns:    parsed.MaxTurns,
+		LeagueLevel: parsed.LeagueLevel,
+		P0Bin:       parsed.P0Bin,
+		P1Bin:       parsed.P1Bin,
 	})
 	results := runMatches(parsed.BatchOptions, runner.RunMatch)
 
@@ -51,6 +53,7 @@ func Run(args []string, stdout io.Writer) error {
 			SeedIncrement: parsed.SeedIncrement,
 			OutputMatches: parsed.OutputMatches,
 			MaxTurns:      parsed.MaxTurns,
+			LeagueLevel:   parsed.LeagueLevel,
 		},
 		Summary: SummarizeMatches(results),
 	}

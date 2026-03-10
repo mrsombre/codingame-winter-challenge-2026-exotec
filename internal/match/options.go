@@ -12,24 +12,25 @@ import (
 type BatchOptions struct {
 	Simulations   int
 	Parallel      int
-	Seed          uint64
-	SeedIncrement *uint64
+	Seed          int64
+	SeedIncrement *int64
 	OutputMatches bool
 }
 
 type ParsedArgs struct {
 	BatchOptions
-	P0Bin    string
-	P1Bin    string
-	MaxTurns int
-	Help     bool
+	P0Bin       string
+	P1Bin       string
+	MaxTurns    int
+	LeagueLevel int
+	Help        bool
 }
 
 func defaultBatchOptions() BatchOptions {
 	return BatchOptions{
 		Simulations: 1,
 		Parallel:    runtime.NumCPU(),
-		Seed:        uint64(time.Now().UnixNano()),
+		Seed:        time.Now().UnixNano(),
 	}
 }
 
@@ -38,6 +39,7 @@ func parseArgs(args []string) (ParsedArgs, error) {
 		BatchOptions: defaultBatchOptions(),
 		P1Bin:        filepath.Clean("./bin/opponent"),
 		MaxTurns:     200,
+		LeagueLevel:  4,
 	}
 
 	for i := 0; i < len(args); i++ {
@@ -67,7 +69,7 @@ func parseArgs(args []string) (ParsedArgs, error) {
 			if i >= len(args) {
 				return ParsedArgs{}, fmt.Errorf("missing value for --seed")
 			}
-			n, err := parseU64(args[i])
+			n, err := parseSeed(args[i])
 			if err != nil {
 				return ParsedArgs{}, fmt.Errorf("invalid integer for --seed: %s", args[i])
 			}
@@ -77,7 +79,7 @@ func parseArgs(args []string) (ParsedArgs, error) {
 			if i >= len(args) {
 				return ParsedArgs{}, fmt.Errorf("missing value for --seedx")
 			}
-			n, err := parseU64(args[i])
+			n, err := parseSeed(args[i])
 			if err != nil {
 				return ParsedArgs{}, fmt.Errorf("invalid integer for --seedx: %s", args[i])
 			}
@@ -94,6 +96,16 @@ func parseArgs(args []string) (ParsedArgs, error) {
 				return ParsedArgs{}, fmt.Errorf("invalid integer for --max-turns: %s", args[i])
 			}
 			parsed.MaxTurns = n
+		case "--league-level":
+			i++
+			if i >= len(args) {
+				return ParsedArgs{}, fmt.Errorf("missing value for --league-level")
+			}
+			n, err := strconv.Atoi(args[i])
+			if err != nil {
+				return ParsedArgs{}, fmt.Errorf("invalid integer for --league-level: %s", args[i])
+			}
+			parsed.LeagueLevel = n
 		case "--p0-bin":
 			i++
 			if i >= len(args) {
@@ -122,7 +134,10 @@ func parseArgs(args []string) (ParsedArgs, error) {
 	if parsed.MaxTurns == 0 {
 		return ParsedArgs{}, fmt.Errorf("--max-turns must be >= 1")
 	}
-	if parsed.SeedIncrement != nil && *parsed.SeedIncrement == 0 {
+	if parsed.LeagueLevel < 1 || parsed.LeagueLevel > 4 {
+		return ParsedArgs{}, fmt.Errorf("--league-level must be between 1 and 4")
+	}
+	if parsed.SeedIncrement != nil && *parsed.SeedIncrement <= 0 {
 		return ParsedArgs{}, fmt.Errorf("--seedx must be >= 1")
 	}
 	if !parsed.Help && parsed.P0Bin == "" {
@@ -142,20 +157,13 @@ Options:
   --seedx <N>          Seed increment per match (seed_i = seed + i*N)
   --output-matches     Include per-match results in JSON output
   --max-turns <N>      Maximum turns per match (default: 200)
+  --league-level <N>   Game league level 1..4 (default: 4)
   --p0-bin <PATH>      Run player 0 as an external stdin/stdout bot binary
   --p1-bin <PATH>      Run player 1 as an external stdin/stdout bot binary (default: ./bin/opponent)
   -h, --help           Show this help`)
 }
 
-func parseU64(value string) (uint64, error) {
+func parseSeed(value string) (int64, error) {
 	raw := strings.TrimPrefix(value, "seed=")
-	n, err := strconv.ParseUint(raw, 10, 64)
-	if err == nil {
-		return n, nil
-	}
-	i, err2 := strconv.ParseInt(raw, 10, 64)
-	if err2 == nil {
-		return uint64(i), nil
-	}
-	return 0, err
+	return strconv.ParseInt(raw, 10, 64)
 }

@@ -1,4 +1,6 @@
-package engine
+// Package grid
+// Source: source/src/main/java/com/codingame/game/grid/Tile.java
+package grid
 
 type TileType int
 

@@ -1,3 +1,5 @@
+// Package engine
+// Source: source/src/main/java/com/codingame/game/Player.java
 package engine
 
 import "fmt"

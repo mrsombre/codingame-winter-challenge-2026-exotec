@@ -1,8 +1,6 @@
+// Package engine
+// Source: source/src/main/java/com/codingame/game/Game.java
 package engine
-
-import (
-	"math/rand"
-)
 
 const MaxTurns = 200
 
@@ -11,7 +9,7 @@ const MaxTurns = 200
 type Game struct {
 	Players []*Player
 	Grid    *Grid
-	Random  *rand.Rand
+	Random  Rng
 	Turn    int
 	Losses  [2]int
 
@@ -19,7 +17,7 @@ type Game struct {
 }
 
 func NewGame(seed int64, leagueLevel int) *Game {
-	rng := rand.New(rand.NewSource(seed))
+	rng := NewSHA1PRNG(seed)
 	gm := NewGridMaker(rng, leagueLevel)
 	grid := gm.Make()
 

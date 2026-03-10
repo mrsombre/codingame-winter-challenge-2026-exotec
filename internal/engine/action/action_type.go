@@ -1,4 +1,6 @@
-package engine
+// Package action
+// Source: source/src/main/java/com/codingame/game/action/ActionType.java
+package action
 
 import (
 	"fmt"
@@ -106,7 +108,7 @@ func ParseAction(command string) (*Action, error) {
 		return action, nil
 	}
 
-	return nil, NewInvalidInputException("MESSAGE text", command)
+	return nil, fmt.Errorf("invalid input: expected %s but got %q", "MESSAGE text", command)
 }
 
 func setMoveAction(match []string, action *Action, direction Direction) error {

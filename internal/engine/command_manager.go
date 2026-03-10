@@ -1,6 +1,11 @@
+// Package engine
+// Source: source/src/main/java/com/codingame/game/CommandManager.java
 package engine
 
-import "strings"
+import (
+	"errors"
+	"strings"
+)
 
 type CommandManager struct{}
 
@@ -51,16 +56,16 @@ func (m *CommandManager) ParseCommands(player *Player, lines []string) error {
 func (m *CommandManager) applyMove(player *Player, action *Action) error {
 	bird := player.GetBirdByID(action.GetBirdID())
 	if bird == nil {
-		return NewGameException("bird not found")
+		return errors.New("bird not found")
 	}
 	if !bird.Alive {
-		return NewGameException("bird is dead")
+		return errors.New("bird is dead")
 	}
 	if bird.Direction != DirUnset {
-		return NewGameException("bird has already been given a move")
+		return errors.New("bird has already been given a move")
 	}
 	if bird.GetFacing().Opposite() == action.GetDirection() {
-		return NewGameException("bird cannot move backwards")
+		return errors.New("bird cannot move backwards")
 	}
 
 	bird.Direction = action.GetDirection()

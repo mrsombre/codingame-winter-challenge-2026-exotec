@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 )
 
-func runMatches(options BatchOptions, runMatch func(simulationID int, seed uint64) MatchResult) []MatchResult {
+func runMatches(options BatchOptions, runMatch func(simulationID int, seed int64) MatchResult) []MatchResult {
 	workers := options.Parallel
 	if workers > options.Simulations {
 		workers = options.Simulations
@@ -64,19 +64,20 @@ func runMatches(options BatchOptions, runMatch func(simulationID int, seed uint6
 	return all
 }
 
-func deriveSeed(base, offset uint64, seedIncrement *uint64) uint64 {
+func deriveSeed(base int64, offset uint64, seedIncrement *int64) int64 {
 	if seedIncrement != nil {
-		return base + offset**seedIncrement
+		return int64(uint64(base) + offset*uint64(*seedIncrement))
 	}
 	return mixSeed(base, offset)
 }
 
-func mixSeed(base, offset uint64) uint64 {
+func mixSeed(base int64, offset uint64) int64 {
+	z := uint64(base)
 	if offset == 0 {
 		return base
 	}
-	z := base + offset + 0x9E3779B97F4A7C15
+	z += offset + 0x9E3779B97F4A7C15
 	z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9
 	z = (z ^ (z >> 27)) * 0x94D049BB133111EB
-	return z ^ (z >> 31)
+	return int64(z ^ (z >> 31))
 }

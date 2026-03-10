@@ -1,3 +1,5 @@
+// Package engine
+// Source: source/src/main/java/com/codingame/game/Serializer.java
 package engine
 
 import (

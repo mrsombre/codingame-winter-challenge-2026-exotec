@@ -1,3 +1,5 @@
+// Package engine
+// Source: source/src/main/java/com/codingame/game/Referee.java
 package engine
 
 type Referee struct {

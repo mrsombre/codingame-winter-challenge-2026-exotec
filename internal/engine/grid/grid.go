@@ -1,4 +1,6 @@
-package engine
+// Package grid
+// Source: source/src/main/java/com/codingame/game/grid/Grid.java
+package grid
 
 var adjacency4 = []Coord{{0, -1}, {1, 0}, {0, 1}, {-1, 0}}
 var adjacency8 = []Coord{

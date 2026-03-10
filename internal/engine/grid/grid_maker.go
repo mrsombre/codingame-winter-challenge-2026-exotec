@@ -1,8 +1,9 @@
-package engine
+// Package grid
+// Source: source/src/main/java/com/codingame/game/grid/GridMaker.java
+package grid
 
 import (
 	"math"
-	"math/rand"
 	"sort"
 )
 
@@ -14,12 +15,20 @@ const (
 	DesiredSpawns = 4
 )
 
+// Rng is the minimal random interface used by GridMaker.
+// Both *rand.Rand and *JavaRandom satisfy it.
+type Rng interface {
+	Float64() float64
+	Intn(n int) int
+	Shuffle(n int, swap func(i, j int))
+}
+
 type GridMaker struct {
-	random      *rand.Rand
+	random      Rng
 	leagueLevel int
 }
 
-func NewGridMaker(random *rand.Rand, leagueLevel int) *GridMaker {
+func NewGridMaker(random Rng, leagueLevel int) *GridMaker {
 	return &GridMaker{random: random, leagueLevel: leagueLevel}
 }
 

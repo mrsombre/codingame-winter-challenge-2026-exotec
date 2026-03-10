@@ -1,4 +1,6 @@
-package engine
+// Package grid
+// Source: source/src/main/java/com/codingame/game/grid/Coord.java
+package grid
 
 import "fmt"
 

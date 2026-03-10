@@ -1,3 +1,5 @@
+// Package engine
+// Source: source/src/main/java/com/codingame/game/Bird.java
 package engine
 
 type Bird struct {
