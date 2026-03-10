@@ -7,11 +7,12 @@ import (
 )
 
 type runnerOutput struct {
-	P0Bin   string            `json:"p0_bin"`
-	P1Bin   string            `json:"p1_bin"`
-	Runner  runnerMetadata    `json:"runner"`
-	Summary MatchSummary      `json:"summary"`
-	Matches []json.RawMessage `json:"matches,omitempty"`
+	P0Bin       string            `json:"p0_bin"`
+	P1Bin       string            `json:"p1_bin"`
+	Runner      runnerMetadata    `json:"runner"`
+	Summary     MatchSummary      `json:"summary"`
+	WorstLosses []json.RawMessage `json:"worst_losses,omitempty"`
+	Matches     []json.RawMessage `json:"matches,omitempty"`
 }
 
 type runnerMetadata struct {
@@ -57,6 +58,15 @@ func Run(args []string, stdout io.Writer) error {
 		},
 		Summary: SummarizeMatches(results),
 	}
+	// Always include worst 5 losses
+	worstIndices := FindWorstLosses(results, 5)
+	if len(worstIndices) > 0 {
+		out.WorstLosses = make([]json.RawMessage, 0, len(worstIndices))
+		for _, idx := range worstIndices {
+			out.WorstLosses = append(out.WorstLosses, json.RawMessage(results[idx].RenderMatch()))
+		}
+	}
+
 	if parsed.OutputMatches {
 		out.Matches = make([]json.RawMessage, 0, len(results))
 		for _, result := range results {

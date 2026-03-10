@@ -1,7 +1,7 @@
 LOGIC ?= basic
 BIN_DIR ?= bin
 
-ENGINE_ARGS ?= --simulations 30 --parallel 5 --seed 50 --output-matches
+ENGINE_ARGS ?= --simulations 30 --parallel 5 --seed 50
 GAME_ARGS ?= --max-turns 100
 
 P0 ?= $(LOGIC)

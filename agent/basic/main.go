@@ -51,11 +51,9 @@ type SearchResult struct {
 }
 
 type World struct {
-	width    int
-	height   int
-	walls    map[Point]bool
 	sources  map[Point]bool
 	occupied map[Point]bool
+	danger   map[Point]bool // cells enemy heads can reach next turn
 }
 
 var dirDelta = map[string]Point{
@@ -66,6 +64,48 @@ var dirDelta = map[string]Point{
 }
 
 var allDirs = []string{DirUp, DirRight, DirDown, DirLeft}
+
+// Precomputed grid data (built once during init, O(1) lookups)
+var (
+	gridW, gridH int
+	wallGrid     [][]bool
+	cellDirs     map[Point][]string // per free cell: directions that don't lead into walls or OOB
+)
+
+func isWall(p Point) bool {
+	if p.x < 0 || p.x >= gridW || p.y < 0 || p.y >= gridH {
+		return true
+	}
+	return wallGrid[p.y][p.x]
+}
+
+func precompute(w, h int, walls map[Point]bool) {
+	gridW, gridH = w, h
+	wallGrid = make([][]bool, h)
+	for y := 0; y < h; y++ {
+		wallGrid[y] = make([]bool, w)
+		for x := 0; x < w; x++ {
+			wallGrid[y][x] = walls[Point{x, y}]
+		}
+	}
+	cellDirs = make(map[Point][]string)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if wallGrid[y][x] {
+				continue
+			}
+			p := Point{x, y}
+			var dirs []string
+			for _, dir := range allDirs {
+				np := add(p, dirDelta[dir])
+				if !isWall(np) {
+					dirs = append(dirs, dir)
+				}
+			}
+			cellDirs[p] = dirs
+		}
+	}
+}
 
 func abs(a int) int {
 	if a < 0 {
@@ -165,11 +205,62 @@ func filterSources(sources []Point, claimed map[Point]bool) []Point {
 }
 
 func sourceScore(head, target Point) int {
-	upPenalty := 0
+	d := dist(head, target)
+	// Mild penalty for sources above head (need wall support to climb, gravity fights us)
 	if target.y < head.y {
-		upPenalty = (head.y - target.y) * 3
+		d += head.y - target.y
 	}
-	return dist(head, target) + upPenalty
+	// Small bonus for sources on solid ground (easy to walk to)
+	if isWall(Point{target.x, target.y + 1}) {
+		d--
+	}
+	return d
+}
+
+// findInstantEat checks if a source is exactly 1 step away in a safe direction.
+// Returns immediately without BFS if found.
+func findInstantEat(bot Bot, world World, sources []Point) SearchResult {
+	head := bot.body[0]
+	facing := facingFromBody(bot.body)
+	sourceSet := make(map[Point]bool, len(sources))
+	for _, s := range sources {
+		sourceSet[s] = true
+	}
+	world.sources = sourceSet
+
+	var best SearchResult
+	for _, dir := range safeLegalDirs(head, facing) {
+		target := add(head, dirDelta[dir])
+		if !sourceSet[target] {
+			continue
+		}
+		_, alive, _, _ := simulateMove(bot.body, facing, dir, world)
+		if !alive {
+			continue
+		}
+		score := sourceScore(head, target)
+		if !best.ok || score < best.score {
+			best = SearchResult{action: dir, target: target, steps: 1, score: score, ok: true}
+		}
+	}
+	return best
+}
+
+// safeLegalDirs returns directions that don't go backward and don't hit walls.
+// Uses precomputed cellDirs for O(1) wall filtering.
+func safeLegalDirs(pos Point, facing string) []string {
+	dirs := cellDirs[pos]
+	if len(dirs) == 0 {
+		return nil
+	}
+	back := opposite(facing)
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		if d != back {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func legalDirs(facing string) []string {
@@ -194,7 +285,7 @@ func hasSupport(body []Point, bodySet map[Point]bool, world World, eaten *Point)
 		if bodySet[below] {
 			continue
 		}
-		if world.walls[below] || world.occupied[below] {
+		if isWall(below) || world.occupied[below] {
 			return true
 		}
 		if world.sources[below] && (eaten == nil || below != *eaten) {
@@ -224,7 +315,7 @@ func simulateMove(body []Point, facing, dir string, world World) (SimState, bool
 		nextBody = append(nextBody, body[:len(body)-1]...)
 	}
 
-	collision := world.walls[newHead] || world.occupied[newHead]
+	collision := isWall(newHead) || world.occupied[newHead]
 	if !collision {
 		for _, part := range nextBody[1:] {
 			if part == newHead {
@@ -258,7 +349,7 @@ func simulateMove(body []Point, facing, dir string, world World) (SimState, bool
 
 		allOut := true
 		for _, part := range nextBody {
-			if part.y < world.height+1 {
+			if part.y < gridH+1 {
 				allOut = false
 				break
 			}
@@ -308,7 +399,8 @@ func findPathAction(bot Bot, world World, sources []Point, maxDepth int) SearchR
 			continue
 		}
 
-		for _, dir := range legalDirs(item.state.facing) {
+		// Use safeLegalDirs: skip wall collisions (losing head is almost always bad)
+		for _, dir := range safeLegalDirs(item.state.body[0], item.state.facing) {
 			next, alive, ate, eatenAt := simulateMove(item.state.body, item.state.facing, dir, world)
 			if !alive {
 				continue
@@ -375,22 +467,59 @@ func findGreedyAction(bot Bot, world World, sources []Point) SearchResult {
 		}
 
 		bestTarget := sources[0]
-		bestScore := sourceScore(next.body[0], bestTarget)
+		bestDist := sourceScore(next.body[0], bestTarget)
 		for _, s := range sources[1:] {
-			if score := sourceScore(next.body[0], s); score < bestScore {
+			if score := sourceScore(next.body[0], s); score < bestDist {
 				bestTarget = s
-				bestScore = score
+				bestDist = score
 			}
 		}
+
+		score := bestDist
 		if ate && sourceSet[eatenAt] {
-			bestScore = -1000
+			score = -1000
 			bestTarget = eatenAt
+		}
+
+		// Penalize moves that cause head collision (scaled by body size)
+		expectedLen := len(bot.body)
+		if ate {
+			expectedLen++
+		}
+		if len(next.body) < expectedLen {
+			if len(bot.body) <= 5 {
+				score += 1000 // losing head when small is devastating
+			} else {
+				score += 300
+			}
+		}
+
+		// Penalize moving into enemy head danger zone (scaled by body size)
+		if world.danger[next.body[0]] {
+			if len(bot.body) <= 5 {
+				score += 100 // risky when small
+			} else {
+				score += 20
+			}
+		}
+
+		// Penalize moves that bounce back to the same position (no progress)
+		if next.body[0] == bot.body[0] {
+			score += 200
+		}
+
+		// Small bonus for positions near walls (better support, stay grounded)
+		for _, wd := range allDirs {
+			np := add(next.body[0], dirDelta[wd])
+			if isWall(np) {
+				score--
+			}
 		}
 
 		candidate := SearchResult{
 			action: dir,
 			target: bestTarget,
-			score:  bestScore,
+			score:  score,
 			ok:     true,
 		}
 
@@ -427,6 +556,8 @@ func main() {
 		}
 	}
 
+	precompute(width, height, walls)
+
 	var snakebotsPerPlayer int
 	fmt.Sscan(readline(), &snakebotsPerPlayer)
 
@@ -453,6 +584,7 @@ func main() {
 		fmt.Sscan(readline(), &snakebotCount)
 
 		var mine []Bot
+		var enemies []Bot
 		allOccupied := make(map[Point]bool)
 
 		for i := 0; i < snakebotCount; i++ {
@@ -465,6 +597,18 @@ func main() {
 			}
 			if myBots[id] {
 				mine = append(mine, Bot{id: id, body: pts})
+			} else {
+				enemies = append(enemies, Bot{id: id, body: pts})
+			}
+		}
+
+		// Compute enemy danger zones: cells any enemy head can reach next turn
+		enemyDanger := make(map[Point]bool)
+		for _, enemy := range enemies {
+			head := enemy.body[0]
+			facing := facingFromBody(enemy.body)
+			for _, dir := range legalDirs(facing) {
+				enemyDanger[add(head, dirDelta[dir])] = true
 			}
 		}
 
@@ -485,10 +629,8 @@ func main() {
 			}
 
 			world := World{
-				width:    width,
-				height:   height,
-				walls:    walls,
 				occupied: otherOccupied,
+				danger:   enemyDanger,
 			}
 
 			available := filterSources(sources, claimed)
@@ -496,12 +638,37 @@ func main() {
 				available = sources
 			}
 
-			plan := findPathAction(bot, world, available, 8)
+			plan := findInstantEat(bot, world, available)
+			if !plan.ok {
+				maxDepth := 8
+				if len(bot.body) <= 5 {
+					maxDepth = 12 // search more carefully when small
+				}
+				plan = findPathAction(bot, world, available, maxDepth)
+			}
 			if !plan.ok {
 				plan = findGreedyAction(bot, world, available)
 			}
 			if !plan.ok || plan.action == "" {
 				plan.action = facingFromBody(bot.body)
+			}
+
+			// Collision avoidance: if planned move would collide, try safe alternatives
+			head := bot.body[0]
+			nextHead := add(head, dirDelta[plan.action])
+			if isWall(nextHead) || otherOccupied[nextHead] {
+				facing := facingFromBody(bot.body)
+				for _, dir := range safeLegalDirs(head, facing) {
+					target := add(head, dirDelta[dir])
+					if otherOccupied[target] {
+						continue
+					}
+					_, alive, _, _ := simulateMove(bot.body, facing, dir, world)
+					if alive {
+						plan.action = dir
+						break
+					}
+				}
 			}
 
 			if len(available) > 0 {
