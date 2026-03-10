@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 const debug = false
@@ -53,7 +54,7 @@ type SearchResult struct {
 type World struct {
 	sources  map[Point]bool
 	occupied map[Point]bool
-	danger   map[Point]bool // cells enemy heads can reach next turn
+	danger   map[Point]bool
 }
 
 var dirDelta = map[string]Point{
@@ -65,11 +66,10 @@ var dirDelta = map[string]Point{
 
 var allDirs = []string{DirUp, DirRight, DirDown, DirLeft}
 
-// Precomputed grid data (built once during init, O(1) lookups)
 var (
 	gridW, gridH int
 	wallGrid     [][]bool
-	cellDirs     map[Point][]string // per free cell: directions that don't lead into walls or OOB
+	cellDirs     map[Point][]string
 )
 
 func isWall(p Point) bool {
@@ -150,10 +150,8 @@ func facingFromBody(body []Point) string {
 	if len(body) < 2 {
 		return DirUp
 	}
-
 	dx := body[0].x - body[1].x
 	dy := body[0].y - body[1].y
-
 	switch {
 	case dx == 1 && dy == 0:
 		return DirRight
@@ -206,48 +204,15 @@ func filterSources(sources []Point, claimed map[Point]bool) []Point {
 
 func sourceScore(head, target Point) int {
 	d := dist(head, target)
-	// Mild penalty for sources above head (need wall support to climb, gravity fights us)
 	if target.y < head.y {
 		d += head.y - target.y
 	}
-	// Small bonus for sources on solid ground (easy to walk to)
 	if isWall(Point{target.x, target.y + 1}) {
 		d--
 	}
 	return d
 }
 
-// findInstantEat checks if a source is exactly 1 step away in a safe direction.
-// Returns immediately without BFS if found.
-func findInstantEat(bot Bot, world World, sources []Point) SearchResult {
-	head := bot.body[0]
-	facing := facingFromBody(bot.body)
-	sourceSet := make(map[Point]bool, len(sources))
-	for _, s := range sources {
-		sourceSet[s] = true
-	}
-	world.sources = sourceSet
-
-	var best SearchResult
-	for _, dir := range safeLegalDirs(head, facing) {
-		target := add(head, dirDelta[dir])
-		if !sourceSet[target] {
-			continue
-		}
-		_, alive, _, _ := simulateMove(bot.body, facing, dir, world)
-		if !alive {
-			continue
-		}
-		score := sourceScore(head, target)
-		if !best.ok || score < best.score {
-			best = SearchResult{action: dir, target: target, steps: 1, score: score, ok: true}
-		}
-	}
-	return best
-}
-
-// safeLegalDirs returns directions that don't go backward and don't hit walls.
-// Uses precomputed cellDirs for O(1) wall filtering.
 func safeLegalDirs(pos Point, facing string) []string {
 	dirs := cellDirs[pos]
 	if len(dirs) == 0 {
@@ -342,11 +307,9 @@ func simulateMove(body []Point, facing, dir string, world World) (SimState, bool
 		if hasSupport(nextBody, bodySet, world, eaten) {
 			break
 		}
-
 		for i := range nextBody {
 			nextBody[i].y++
 		}
-
 		allOut := true
 		for _, part := range nextBody {
 			if part.y < gridH+1 {
@@ -365,7 +328,174 @@ func simulateMove(body []Point, facing, dir string, world World) (SimState, bool
 	}, true, willEat, newHead
 }
 
-func findPathAction(bot Bot, world World, sources []Point, maxDepth int) SearchResult {
+// floodFillWithDist performs BFS returning reachable count and per-cell distances.
+func floodFillWithDist(start Point, blocked map[Point]bool) (int, map[Point]int) {
+	dists := make(map[Point]int, 128)
+	if isWall(start) || blocked[start] {
+		return 0, dists
+	}
+	dists[start] = 0
+	queue := make([]Point, 0, 128)
+	queue = append(queue, start)
+	count := 0
+	for i := 0; i < len(queue); i++ {
+		p := queue[i]
+		count++
+		d := dists[p]
+		for _, dir := range allDirs {
+			np := add(p, dirDelta[dir])
+			if _, visited := dists[np]; visited {
+				continue
+			}
+			if isWall(np) || blocked[np] {
+				continue
+			}
+			dists[np] = d + 1
+			queue = append(queue, np)
+		}
+	}
+	return count, dists
+}
+
+// gridBFSDist returns shortest grid distance from start to each reachable cell.
+func gridBFSDist(start Point, blocked map[Point]bool) map[Point]int {
+	_, dists := floodFillWithDist(start, blocked)
+	return dists
+}
+
+// DirInfo holds precomputed data for a single movement direction.
+type DirInfo struct {
+	flood int
+	dists map[Point]int // BFS distances from new head
+	state SimState
+	alive bool
+	ate   bool
+	eaten Point
+}
+
+// computeDirInfo precomputes simulation + flood fill + BFS for each safe legal direction.
+func computeDirInfo(bot Bot, world World) map[string]*DirInfo {
+	head := bot.body[0]
+	facing := facingFromBody(bot.body)
+	info := make(map[string]*DirInfo)
+
+	for _, dir := range safeLegalDirs(head, facing) {
+		next, alive, ate, eatenAt := simulateMove(bot.body, facing, dir, world)
+		di := &DirInfo{
+			alive: alive,
+			ate:   ate,
+			eaten: eatenAt,
+		}
+		if alive {
+			di.state = next
+			blocked := make(map[Point]bool, len(world.occupied)+len(next.body))
+			for p := range world.occupied {
+				blocked[p] = true
+			}
+			for _, p := range next.body[1:] {
+				blocked[p] = true
+			}
+			di.flood, di.dists = floodFillWithDist(next.body[0], blocked)
+		}
+		info[dir] = di
+	}
+	return info
+}
+
+// isSafeDir checks if a direction has enough reachable space.
+func isSafeDir(dir string, dirInfo map[string]*DirInfo, bodyLen int) bool {
+	di, ok := dirInfo[dir]
+	if !ok || !di.alive {
+		return false
+	}
+	threshold := bodyLen * 2
+	if threshold < 4 {
+		threshold = 4
+	}
+	return di.flood >= threshold
+}
+
+// bestSafeDir returns the direction with highest flood fill.
+func bestSafeDir(dirInfo map[string]*DirInfo) string {
+	bestDir := ""
+	bestFlood := -1
+	for dir, di := range dirInfo {
+		if di.alive && di.flood > bestFlood {
+			bestFlood = di.flood
+			bestDir = dir
+		}
+	}
+	return bestDir
+}
+
+// filterCompetitiveSources removes sources where enemies are much closer by BFS distance.
+func filterCompetitiveSources(sources []Point, myDists map[Point]int, enemyDists map[Point]int) []Point {
+	out := make([]Point, 0, len(sources))
+	for _, s := range sources {
+		md, mok := myDists[s]
+		ed, eok := enemyDists[s]
+		if mok && eok && ed < md-3 {
+			continue
+		}
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		return sources
+	}
+	return out
+}
+
+// computeEnemyMinDists returns minimum enemy grid distance to each source.
+func computeEnemyMinDists(enemies []Bot, allOccupied map[Point]bool, sources []Point) map[Point]int {
+	result := make(map[Point]int)
+	for _, enemy := range enemies {
+		eBlocked := make(map[Point]bool, len(allOccupied))
+		for p := range allOccupied {
+			eBlocked[p] = true
+		}
+		for _, p := range enemy.body {
+			delete(eBlocked, p)
+		}
+		eDists := gridBFSDist(enemy.body[0], eBlocked)
+		for _, s := range sources {
+			if d, ok := eDists[s]; ok {
+				if existing, exists := result[s]; !exists || d < existing {
+					result[s] = d
+				}
+			}
+		}
+	}
+	return result
+}
+
+func findInstantEat(bot Bot, world World, sources []Point) SearchResult {
+	head := bot.body[0]
+	facing := facingFromBody(bot.body)
+	sourceSet := make(map[Point]bool, len(sources))
+	for _, s := range sources {
+		sourceSet[s] = true
+	}
+	world.sources = sourceSet
+
+	var best SearchResult
+	for _, dir := range safeLegalDirs(head, facing) {
+		target := add(head, dirDelta[dir])
+		if !sourceSet[target] {
+			continue
+		}
+		_, alive, _, _ := simulateMove(bot.body, facing, dir, world)
+		if !alive {
+			continue
+		}
+		score := sourceScore(head, target)
+		if !best.ok || score < best.score {
+			best = SearchResult{action: dir, target: target, steps: 1, score: score, ok: true}
+		}
+	}
+	return best
+}
+
+func findPathAction(bot Bot, world World, sources []Point, maxDepth int, dirInfo map[string]*DirInfo, enemyDists map[Point]int, deadline time.Time) SearchResult {
 	if len(sources) == 0 {
 		return SearchResult{}
 	}
@@ -390,6 +520,7 @@ func findPathAction(bot Bot, world World, sources []Point, maxDepth int) SearchR
 	queue := []queueItem{{state: start}}
 	seen := map[string]bool{stateKey(start): true}
 	best := SearchResult{}
+	iterations := 0
 
 	for len(queue) > 0 {
 		item := queue[0]
@@ -399,7 +530,12 @@ func findPathAction(bot Bot, world World, sources []Point, maxDepth int) SearchR
 			continue
 		}
 
-		// Use safeLegalDirs: skip wall collisions (losing head is almost always bad)
+		// Check deadline every 256 iterations to avoid syscall overhead
+		iterations++
+		if iterations&255 == 0 && time.Now().After(deadline) {
+			break
+		}
+
 		for _, dir := range safeLegalDirs(item.state.body[0], item.state.facing) {
 			next, alive, ate, eatenAt := simulateMove(item.state.body, item.state.facing, dir, world)
 			if !alive {
@@ -412,15 +548,36 @@ func findPathAction(bot Bot, world World, sources []Point, maxDepth int) SearchR
 			}
 
 			if ate && sourceSet[eatenAt] {
-				score := sourceScore(bot.body[0], eatenAt)
+				rawSteps := item.depth + 1
+				// Unified score: steps * 1000 + tiebreakers
+				score := rawSteps * 1000
+				score += sourceScore(bot.body[0], eatenAt)
+				// Penalize first directions with dangerously low flood fill
+				if di, ok := dirInfo[first]; ok && di.alive {
+					if di.flood < len(bot.body)*2 {
+						score += 3000 // equivalent to 3 extra steps
+					} else if di.flood < len(bot.body)*3 {
+						score += 1000
+					}
+				}
+				// Strongly prefer sources where we beat the enemy
+				if ed, ok := enemyDists[eatenAt]; ok {
+					if rawSteps <= ed {
+						score -= 300
+					} else if rawSteps <= ed+2 {
+						score += 500 // enemy is slightly closer, mild penalty
+					} else {
+						score += 2000 // enemy is much closer, avoid
+					}
+				}
 				candidate := SearchResult{
 					action: first,
 					target: eatenAt,
-					steps:  item.depth + 1,
+					steps:  rawSteps,
 					score:  score,
 					ok:     true,
 				}
-				if !best.ok || candidate.steps < best.steps || (candidate.steps == best.steps && candidate.score < best.score) {
+				if !best.ok || candidate.score < best.score {
 					best = candidate
 				}
 				continue
@@ -446,7 +603,7 @@ func findPathAction(bot Bot, world World, sources []Point, maxDepth int) SearchR
 	return best
 }
 
-func findGreedyAction(bot Bot, world World, sources []Point) SearchResult {
+func findGreedyAction(bot Bot, world World, sources []Point, dirInfo map[string]*DirInfo, enemies []Bot, enemyDists map[Point]int) SearchResult {
 	if len(sources) == 0 {
 		return SearchResult{action: DirUp, ok: true}
 	}
@@ -459,6 +616,7 @@ func findGreedyAction(bot Bot, world World, sources []Point) SearchResult {
 
 	best := SearchResult{}
 	facing := facingFromBody(bot.body)
+	bodyLen := len(bot.body)
 
 	for _, dir := range legalDirs(facing) {
 		next, alive, ate, eatenAt := simulateMove(bot.body, facing, dir, world)
@@ -466,12 +624,26 @@ func findGreedyAction(bot Bot, world World, sources []Point) SearchResult {
 			continue
 		}
 
+		// Use BFS distances from DirInfo if available, else fall back to manhattan
+		di := dirInfo[dir]
 		bestTarget := sources[0]
-		bestDist := sourceScore(next.body[0], bestTarget)
-		for _, s := range sources[1:] {
-			if score := sourceScore(next.body[0], s); score < bestDist {
+		bestDist := 9999
+		useBFS := di != nil && di.alive && di.dists != nil
+
+		for _, s := range sources {
+			var d int
+			if useBFS {
+				if bd, ok := di.dists[s]; ok {
+					d = bd
+				} else {
+					d = 9999 // unreachable via BFS
+				}
+			} else {
+				d = sourceScore(next.body[0], s)
+			}
+			if d < bestDist {
+				bestDist = d
 				bestTarget = s
-				bestDist = score
 			}
 		}
 
@@ -481,38 +653,73 @@ func findGreedyAction(bot Bot, world World, sources []Point) SearchResult {
 			bestTarget = eatenAt
 		}
 
-		// Penalize moves that cause head collision (scaled by body size)
-		expectedLen := len(bot.body)
+		// Head collision penalty
+		expectedLen := bodyLen
 		if ate {
 			expectedLen++
 		}
 		if len(next.body) < expectedLen {
-			if len(bot.body) <= 5 {
-				score += 1000 // losing head when small is devastating
+			if bodyLen <= 5 {
+				score += 1000
 			} else {
 				score += 300
 			}
 		}
 
-		// Penalize moving into enemy head danger zone (scaled by body size)
+		// Danger zone with size awareness
 		if world.danger[next.body[0]] {
-			if len(bot.body) <= 5 {
-				score += 100 // risky when small
-			} else {
-				score += 20
+			dangerPenalty := 20
+			if bodyLen <= 3 {
+				dangerPenalty = 500
+			} else if bodyLen <= 5 {
+				dangerPenalty = 100
 			}
+			for _, enemy := range enemies {
+				ehead := enemy.body[0]
+				efacing := facingFromBody(enemy.body)
+				canReach := false
+				for _, edir := range legalDirs(efacing) {
+					if add(ehead, dirDelta[edir]) == next.body[0] {
+						canReach = true
+						break
+					}
+				}
+				if canReach && len(enemy.body) <= 3 && bodyLen > 3 {
+					dangerPenalty = -500
+				}
+			}
+			score += dangerPenalty
 		}
 
-		// Penalize moves that bounce back to the same position (no progress)
+		// No-progress penalty
 		if next.body[0] == bot.body[0] {
 			score += 200
 		}
 
-		// Small bonus for positions near walls (better support, stay grounded)
+		// Wall proximity bonus
 		for _, wd := range allDirs {
 			np := add(next.body[0], dirDelta[wd])
 			if isWall(np) {
 				score--
+			}
+		}
+
+		// Flood fill safety penalty
+		if di != nil && di.alive {
+			if di.flood < bodyLen {
+				score += 2000
+			} else if di.flood < bodyLen*2 {
+				score += 500
+			}
+		} else if di == nil {
+			score += 1500
+		}
+
+		// Enemy competition: penalize targets enemy will reach first
+		if ed, ok := enemyDists[bestTarget]; ok {
+			myD := bestDist
+			if myD < 9999 && ed < myD-3 {
+				score += 50
 			}
 		}
 
@@ -572,6 +779,9 @@ func main() {
 	}
 
 	for {
+		turnStart := time.Now()
+		turnDeadline := turnStart.Add(45 * time.Millisecond)
+
 		var powerSourceCount int
 		fmt.Sscan(readline(), &powerSourceCount)
 
@@ -602,7 +812,7 @@ func main() {
 			}
 		}
 
-		// Compute enemy danger zones: cells any enemy head can reach next turn
+		// Enemy danger zones
 		enemyDanger := make(map[Point]bool)
 		for _, enemy := range enemies {
 			head := enemy.body[0]
@@ -612,16 +822,36 @@ func main() {
 			}
 		}
 
+		// Enemy minimum distances to sources
+		enemyDists := computeEnemyMinDists(enemies, allOccupied, sources)
+
+		// Sort bots: closest to any source gets first pick of targets
 		sort.Slice(mine, func(i, j int) bool {
+			di, dj := 9999, 9999
+			for _, s := range sources {
+				if d := dist(mine[i].body[0], s); d < di {
+					di = d
+				}
+				if d := dist(mine[j].body[0], s); d < dj {
+					dj = d
+				}
+			}
+			if di != dj {
+				return di < dj
+			}
 			return mine[i].id < mine[j].id
 		})
 
 		var actions []string
 		claimed := make(map[Point]bool)
+		plannedHeads := make(map[Point]bool)
 
 		for _, bot := range mine {
-			otherOccupied := make(map[Point]bool, len(allOccupied))
+			otherOccupied := make(map[Point]bool, len(allOccupied)+len(plannedHeads))
 			for p := range allOccupied {
+				otherOccupied[p] = true
+			}
+			for p := range plannedHeads {
 				otherOccupied[p] = true
 			}
 			for _, p := range bot.body {
@@ -633,40 +863,90 @@ func main() {
 				danger:   enemyDanger,
 			}
 
+			// Precompute per-direction info (simulation + flood fill + BFS distances)
+			dirInfo := computeDirInfo(bot, world)
+
+			// Filter sources: unclaimed, then competitive
 			available := filterSources(sources, claimed)
 			if len(available) == 0 {
 				available = sources
 			}
+			myDists := gridBFSDist(bot.body[0], otherOccupied)
+			competitive := filterCompetitiveSources(available, myDists, enemyDists)
 
-			plan := findInstantEat(bot, world, available)
+			// Decision pipeline
+			plan := findInstantEat(bot, world, competitive)
+
+			// Check if instant eat direction is safe
+			if plan.ok && !isSafeDir(plan.action, dirInfo, len(bot.body)) {
+				altPlan := findInstantEat(bot, world, available)
+				if altPlan.ok && isSafeDir(altPlan.action, dirInfo, len(bot.body)) {
+					plan = altPlan
+				} else {
+					plan.ok = false
+				}
+			}
+
 			if !plan.ok {
 				maxDepth := 8
 				if len(bot.body) <= 5 {
-					maxDepth = 12 // search more carefully when small
+					maxDepth = 12
 				}
-				plan = findPathAction(bot, world, available, maxDepth)
+				// Reduce depth if running low on time
+				remaining := time.Until(turnDeadline)
+				if remaining < 15*time.Millisecond {
+					maxDepth = 4
+				} else if remaining < 25*time.Millisecond {
+					maxDepth = 6
+				}
+				// Single BFS with all sources (competition handled via scoring)
+				plan = findPathAction(bot, world, available, maxDepth, dirInfo, enemyDists, turnDeadline)
+
+				// Safety check: if BFS direction has dangerously low flood, pick safest
+				if plan.ok && !isSafeDir(plan.action, dirInfo, len(bot.body)) {
+					bs := bestSafeDir(dirInfo)
+					if bs != "" && isSafeDir(bs, dirInfo, len(bot.body)) {
+						plan.action = bs
+					}
+				}
 			}
 			if !plan.ok {
-				plan = findGreedyAction(bot, world, available)
+				plan = findGreedyAction(bot, world, available, dirInfo, enemies, enemyDists)
 			}
 			if !plan.ok || plan.action == "" {
 				plan.action = facingFromBody(bot.body)
 			}
 
-			// Collision avoidance: if planned move would collide, try safe alternatives
+			// Final collision avoidance using dirInfo
 			head := bot.body[0]
 			nextHead := add(head, dirDelta[plan.action])
 			if isWall(nextHead) || otherOccupied[nextHead] {
-				facing := facingFromBody(bot.body)
-				for _, dir := range safeLegalDirs(head, facing) {
+				bestDir := ""
+				bestFlood := -1
+				for dir, di := range dirInfo {
+					if !di.alive {
+						continue
+					}
 					target := add(head, dirDelta[dir])
 					if otherOccupied[target] {
 						continue
 					}
-					_, alive, _, _ := simulateMove(bot.body, facing, dir, world)
-					if alive {
-						plan.action = dir
-						break
+					if di.flood > bestFlood {
+						bestFlood = di.flood
+						bestDir = dir
+					}
+				}
+				if bestDir != "" {
+					plan.action = bestDir
+				}
+			}
+
+			// Safety override: only when chosen direction is dangerously low
+			if di, ok := dirInfo[plan.action]; ok && di.alive {
+				if di.flood < len(bot.body)+2 {
+					bs := bestSafeDir(dirInfo)
+					if bs != "" && dirInfo[bs].flood >= len(bot.body)*3 {
+						plan.action = bs
 					}
 				}
 			}
@@ -674,6 +954,9 @@ func main() {
 			if len(available) > 0 {
 				claimed[plan.target] = true
 			}
+
+			// Track planned head so subsequent allied bots avoid this cell
+			plannedHeads[add(bot.body[0], dirDelta[plan.action])] = true
 
 			actions = append(actions, fmt.Sprintf("%d %s", bot.id, plan.action))
 		}
