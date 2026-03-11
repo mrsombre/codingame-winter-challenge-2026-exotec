@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"container/heap"
 	"fmt"
 	"os"
 	"sort"
@@ -70,7 +71,106 @@ var (
 	gridW, gridH int
 	wallGrid     [][]bool
 	cellDirs     map[Point][]string
+	upMinLen     [][]int
+	supportCount int
+	supportCompCount int
+	supportNodes [MaxSupportNodes]SupportNode
+	supportCompID [MaxSupportNodes]int
+	supportNodeID [MaxGridH][MaxGridW]int
+	anchorTargetMinLenCache = map[anchorTargetKey]int{}
+	committedRoutes = map[int]RoutePlan{}
 )
+
+const (
+	MaxGridW = 45
+	MaxGridH = 30
+	MaxSupportNodes = MaxGridW * MaxGridH
+	noSupportNode = -1
+	infDistance = 1 << 28
+	maxRouteDepth = 40
+	maxRouteExpansions = 5000
+	maxAppleSequence = 2
+	collisionLookahead = 8
+)
+
+type SupportNode struct {
+	pos       Point
+	neighbors [8]int
+	deg       int
+}
+
+type RoutePlan struct {
+	action   string
+	target   Point
+	eatTurn  int
+	steps    int
+	path     []string
+	endState SimState
+	ok       bool
+}
+
+type PlannedSequence struct {
+	firstAction string
+	firstTarget Point
+	firstEatTurn int
+	plans []RoutePlan
+	ok bool
+}
+
+type distCacheKey struct {
+	target Point
+	bodyLen int
+}
+
+type anchorTargetKey struct {
+	compID int
+	target Point
+}
+
+type searchItem struct {
+	state SimState
+	first string
+	path  []string
+	depth int
+	score int
+	index int
+}
+
+type MoveEval struct {
+	dir      string
+	state    SimState
+	alive    bool
+	headLoss bool
+	horizon  int
+}
+
+type searchHeap []*searchItem
+
+func (h searchHeap) Len() int { return len(h) }
+func (h searchHeap) Less(i, j int) bool {
+	if h[i].score != h[j].score {
+		return h[i].score < h[j].score
+	}
+	return h[i].depth < h[j].depth
+}
+func (h searchHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index = i
+	h[j].index = j
+}
+func (h *searchHeap) Push(x any) {
+	item := x.(*searchItem)
+	item.index = len(*h)
+	*h = append(*h, item)
+}
+func (h *searchHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	item.index = -1
+	*h = old[:n-1]
+	return item
+}
 
 func isWall(p Point) bool {
 	if p.x < 0 || p.x >= gridW || p.y < 0 || p.y >= gridH {
@@ -82,12 +182,17 @@ func isWall(p Point) bool {
 func precompute(w, h int, walls map[Point]bool) {
 	gridW, gridH = w, h
 	wallGrid = make([][]bool, h)
+	upMinLen = make([][]int, h)
+	anchorTargetMinLenCache = map[anchorTargetKey]int{}
 	for y := 0; y < h; y++ {
 		wallGrid[y] = make([]bool, w)
+		upMinLen[y] = make([]int, w)
 		for x := 0; x < w; x++ {
 			wallGrid[y][x] = walls[Point{x, y}]
 		}
 	}
+	precomputeUpMinLen()
+	precomputeSupportNodes()
 	cellDirs = make(map[Point][]string)
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
@@ -103,6 +208,105 @@ func precompute(w, h int, walls map[Point]bool) {
 				}
 			}
 			cellDirs[p] = dirs
+		}
+	}
+}
+
+func precomputeSupportNodes() {
+	supportCount = 0
+	supportCompCount = 0
+	for y := 0; y < MaxGridH; y++ {
+		for x := 0; x < MaxGridW; x++ {
+			supportNodeID[y][x] = noSupportNode
+		}
+	}
+
+	for y := 0; y < gridH; y++ {
+		for x := 0; x < gridW; x++ {
+			p := Point{x, y}
+			if isWall(p) || !hasStaticSupport(p) {
+				continue
+			}
+			id := supportCount
+			supportCount++
+			supportNodes[id] = SupportNode{pos: p}
+			supportNodeID[y][x] = id
+		}
+	}
+
+	for id := 0; id < supportCount; id++ {
+		p := supportNodes[id].pos
+		node := SupportNode{pos: p}
+		for dy := -1; dy <= 1; dy++ {
+			for dx := -1; dx <= 1; dx++ {
+				if dx == 0 && dy == 0 {
+					continue
+				}
+				np := Point{p.x + dx, p.y + dy}
+				nid := supportNodeAt(np)
+				if nid == noSupportNode {
+					continue
+				}
+				node.neighbors[node.deg] = nid
+				node.deg++
+			}
+		}
+		supportNodes[id] = node
+	}
+
+	for id := 0; id < supportCount; id++ {
+		supportCompID[id] = noSupportNode
+	}
+	queue := make([]int, 0, supportCount)
+	for id := 0; id < supportCount; id++ {
+		if supportCompID[id] != noSupportNode {
+			continue
+		}
+		compID := supportCompCount
+		supportCompCount++
+		supportCompID[id] = compID
+		queue = queue[:0]
+		queue = append(queue, id)
+		for i := 0; i < len(queue); i++ {
+			cur := queue[i]
+			node := supportNodes[cur]
+			for j := 0; j < node.deg; j++ {
+				next := node.neighbors[j]
+				if supportCompID[next] != noSupportNode {
+					continue
+				}
+				supportCompID[next] = compID
+				queue = append(queue, next)
+			}
+		}
+	}
+}
+
+func hasStaticSupport(p Point) bool {
+	return isWall(Point{p.x, p.y + 1})
+}
+
+func supportNodeAt(p Point) int {
+	if p.x < 0 || p.x >= gridW || p.y < 0 || p.y >= gridH {
+		return noSupportNode
+	}
+	return supportNodeID[p.y][p.x]
+}
+
+func precomputeUpMinLen() {
+	for y := 0; y < gridH; y++ {
+		for x := 0; x < gridW; x++ {
+			if wallGrid[y][x] {
+				upMinLen[y][x] = 0
+				continue
+			}
+			upMinLen[y][x] = 9999
+			for yy := y + 1; yy < gridH; yy++ {
+				if wallGrid[yy][x] {
+					upMinLen[y][x] = yy - y
+					break
+				}
+			}
 		}
 	}
 }
@@ -363,6 +567,560 @@ func gridBFSDist(start Point, blocked map[Point]bool) map[Point]int {
 	return dists
 }
 
+// gridBFSDistBodyAware is a conservative cheap-distance heuristic.
+// It refuses to treat steep UP entries as normal BFS edges when the body is too short
+// to remain vertically supported in that column on empty terrain.
+func gridBFSDistBodyAware(start Point, blocked map[Point]bool, bodyLen int) map[Point]int {
+	dists := make(map[Point]int, 128)
+	if isWall(start) || blocked[start] {
+		return dists
+	}
+	dists[start] = 0
+	queue := make([]Point, 0, 128)
+	queue = append(queue, start)
+	for i := 0; i < len(queue); i++ {
+		p := queue[i]
+		d := dists[p]
+		for _, dir := range allDirs {
+			np := add(p, dirDelta[dir])
+			if _, visited := dists[np]; visited {
+				continue
+			}
+			if isWall(np) || blocked[np] {
+				continue
+			}
+			if dir == DirUp && bodyLen < upMinLen[np.y][np.x] {
+				continue
+			}
+			dists[np] = d + 1
+			queue = append(queue, np)
+		}
+	}
+	return dists
+}
+
+func supportEdgeMinLen(fromID, toID int) int {
+	from := supportNodes[fromID].pos
+	to := supportNodes[toID].pos
+	dx := abs(to.x - from.x)
+	dy := to.y - from.y
+	switch {
+	case dy >= 0:
+		return 1
+	case dy == -1 && dx <= 1:
+		return 3
+	default:
+		return 9999
+	}
+}
+
+func anchorSupportNode(body []Point) int {
+	for _, part := range body {
+		if hasStaticSupport(part) {
+			if id := supportNodeAt(part); id != noSupportNode {
+				return id
+			}
+		}
+	}
+	return noSupportNode
+}
+
+func anchorSupportComp(body []Point) int {
+	if id := anchorSupportNode(body); id != noSupportNode {
+		return supportCompID[id]
+	}
+	return noSupportNode
+}
+
+func minLenFromAnchorCompToTarget(anchorComp int, target Point) int {
+	if anchorComp == noSupportNode || isWall(target) {
+		return infDistance
+	}
+	key := anchorTargetKey{compID: anchorComp, target: target}
+	if v, ok := anchorTargetMinLenCache[key]; ok {
+		return v
+	}
+
+	type state struct {
+		p   Point
+		run int
+	}
+
+	maxLen := gridW + gridH
+	if maxLen < 1 {
+		maxLen = 1
+	}
+
+	for need := 1; need <= maxLen; need++ {
+		visited := make([][][]bool, gridH)
+		for y := 0; y < gridH; y++ {
+			visited[y] = make([][]bool, gridW)
+			for x := 0; x < gridW; x++ {
+				visited[y][x] = make([]bool, need+1)
+			}
+		}
+
+		queue := make([]state, 0, supportCount)
+		for id := 0; id < supportCount; id++ {
+			if supportCompID[id] != anchorComp {
+				continue
+			}
+			p := supportNodes[id].pos
+			visited[p.y][p.x][1] = true
+			queue = append(queue, state{p: p, run: 1})
+		}
+
+		for i := 0; i < len(queue); i++ {
+			cur := queue[i]
+			if cur.p == target {
+				anchorTargetMinLenCache[key] = need
+				return need
+			}
+
+			for _, dir := range allDirs {
+				np := add(cur.p, dirDelta[dir])
+				if isWall(np) {
+					continue
+				}
+				nextRun := cur.run + 1
+				if hasStaticSupport(np) {
+					nextRun = 1
+				}
+				if nextRun > need || visited[np.y][np.x][nextRun] {
+					continue
+				}
+				visited[np.y][np.x][nextRun] = true
+				queue = append(queue, state{p: np, run: nextRun})
+			}
+		}
+	}
+
+	anchorTargetMinLenCache[key] = infDistance
+	return infDistance
+}
+
+func appleApproachNodes(target Point) []int {
+	var nodes []int
+	seen := [MaxSupportNodes]bool{}
+	if id := supportNodeAt(target); id != noSupportNode {
+		nodes = append(nodes, id)
+		seen[id] = true
+	}
+	for _, dir := range allDirs {
+		p := add(target, dirDelta[dir])
+		id := supportNodeAt(p)
+		if id == noSupportNode || seen[id] {
+			continue
+		}
+		nodes = append(nodes, id)
+		seen[id] = true
+	}
+	if len(nodes) > 0 {
+		return nodes
+	}
+
+	bestY := infDistance
+	for id := 0; id < supportCount; id++ {
+		p := supportNodes[id].pos
+		if p.y < target.y || abs(p.x-target.x) > 1 {
+			continue
+		}
+		if p.y < bestY {
+			bestY = p.y
+			nodes = nodes[:0]
+			nodes = append(nodes, id)
+			seen[id] = true
+			continue
+		}
+		if p.y == bestY && !seen[id] {
+			nodes = append(nodes, id)
+			seen[id] = true
+		}
+	}
+	if len(nodes) > 0 {
+		return nodes
+	}
+
+	bestY = infDistance
+	for id := 0; id < supportCount; id++ {
+		p := supportNodes[id].pos
+		if p.y < target.y || abs(p.x-target.x) > 2 {
+			continue
+		}
+		if p.y < bestY {
+			bestY = p.y
+			nodes = nodes[:0]
+			nodes = append(nodes, id)
+			seen[id] = true
+			continue
+		}
+		if p.y == bestY && !seen[id] {
+			nodes = append(nodes, id)
+			seen[id] = true
+		}
+	}
+	return nodes
+}
+
+func supportDistances(target Point, bodyLen int, cache map[distCacheKey][]int) []int {
+	key := distCacheKey{target: target, bodyLen: bodyLen}
+	if d, ok := cache[key]; ok {
+		return d
+	}
+
+	dists := make([]int, supportCount)
+	for i := range dists {
+		dists[i] = infDistance
+	}
+
+	startNodes := appleApproachNodes(target)
+	queue := make([]int, 0, supportCount)
+	for _, id := range startNodes {
+		if dists[id] == 0 {
+			continue
+		}
+		dists[id] = 0
+		queue = append(queue, id)
+	}
+
+	for i := 0; i < len(queue); i++ {
+		cur := queue[i]
+		base := dists[cur]
+		node := supportNodes[cur]
+		for j := 0; j < node.deg; j++ {
+			prev := node.neighbors[j]
+			if bodyLen < supportEdgeMinLen(prev, cur) {
+				continue
+			}
+			if base+1 >= dists[prev] {
+				continue
+			}
+			dists[prev] = base + 1
+			queue = append(queue, prev)
+		}
+	}
+
+	cache[key] = dists
+	return dists
+}
+
+func supportEstimate(state SimState, target Point, targetDists []int) int {
+	estimate := dist(state.body[0], target)
+	if target.y < state.body[0].y {
+		estimate += state.body[0].y - target.y
+	}
+
+	anchor := anchorSupportNode(state.body)
+	if anchor != noSupportNode && anchor < len(targetDists) {
+		if d := targetDists[anchor]; d < infDistance {
+			candidate := d * 2
+			if candidate < estimate {
+				estimate = candidate
+			}
+		}
+	}
+
+	return estimate
+}
+
+func planningWorld(sourceSet map[Point]bool) World {
+	return World{
+		sources:  sourceSet,
+		occupied: map[Point]bool{},
+	}
+}
+
+func planRouteToApple(start SimState, target Point, sourceSet map[Point]bool, bodyLen int, cache map[distCacheKey][]int, deadline time.Time) RoutePlan {
+	anchorComp := anchorSupportComp(start.body)
+	if target.y < start.body[0].y && bodyLen < minLenFromAnchorCompToTarget(anchorComp, target) {
+		return RoutePlan{}
+	}
+	dists := supportDistances(target, bodyLen, cache)
+
+	searchWorld := planningWorld(sourceSet)
+	seen := map[string]int{stateKey(start): 0}
+	pq := searchHeap{}
+	heap.Init(&pq)
+	heap.Push(&pq, &searchItem{
+		state: start,
+		depth: 0,
+		score: supportEstimate(start, target, dists),
+	})
+
+	expansions := 0
+	for pq.Len() > 0 {
+		if time.Now().After(deadline) || expansions >= maxRouteExpansions {
+			break
+		}
+		expansions++
+		item := heap.Pop(&pq).(*searchItem)
+		if item.depth >= maxRouteDepth {
+			continue
+		}
+		if prev, ok := seen[stateKey(item.state)]; ok && prev < item.depth {
+			continue
+		}
+
+		for _, dir := range safeLegalDirs(item.state.body[0], item.state.facing) {
+			next, alive, ate, eatenAt := simulateMove(item.state.body, item.state.facing, dir, searchWorld)
+			if !alive {
+				continue
+			}
+
+			first := item.first
+			if first == "" {
+				first = dir
+			}
+			nextPath := append(append([]string(nil), item.path...), dir)
+			depth := item.depth + 1
+
+			if ate {
+				if eatenAt == target {
+					return RoutePlan{
+						action:   first,
+						target:   target,
+						eatTurn:  depth,
+						steps:    depth,
+						path:     nextPath,
+						endState: next,
+						ok:       true,
+					}
+				}
+				continue
+			}
+
+			key := stateKey(next)
+			if prev, ok := seen[key]; ok && prev <= depth {
+				continue
+			}
+			seen[key] = depth
+			heap.Push(&pq, &searchItem{
+				state: next,
+				first: first,
+				path:  nextPath,
+				depth: depth,
+				score: depth + supportEstimate(next, target, dists),
+			})
+		}
+	}
+
+	return RoutePlan{}
+}
+
+func chooseBestAppleRoute(start SimState, apples []Point, reserved map[Point]int, currentTurn int, cache map[distCacheKey][]int, deadline time.Time) RoutePlan {
+	sourceSet := make(map[Point]bool, len(apples))
+	for _, apple := range apples {
+		sourceSet[apple] = true
+	}
+
+	best := RoutePlan{}
+	bestScore := infDistance
+	for _, apple := range apples {
+		if _, ok := reserved[apple]; ok {
+			continue
+		}
+		plan := planRouteToApple(start, apple, sourceSet, len(start.body), cache, deadline)
+		if !plan.ok {
+			continue
+		}
+		absEatTurn := currentTurn + plan.eatTurn
+		score := absEatTurn*1000 + plan.steps*10 + dist(start.body[0], apple)
+		if !best.ok || score < bestScore {
+			best = plan
+			best.eatTurn = absEatTurn
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func buildAppleSequence(bot Bot, apples []Point, reserved map[Point]int, cache map[distCacheKey][]int, deadline time.Time) PlannedSequence {
+	state := SimState{
+		body:   cloneBody(bot.body),
+		facing: facingFromBody(bot.body),
+	}
+
+	remaining := append([]Point(nil), apples...)
+	currentTurn := 0
+	sequence := PlannedSequence{}
+
+	for len(sequence.plans) < maxAppleSequence && len(remaining) > 0 {
+		plan := chooseBestAppleRoute(state, remaining, reserved, currentTurn, cache, deadline)
+		if !plan.ok {
+			break
+		}
+		if !sequence.ok {
+			sequence.ok = true
+			sequence.firstAction = plan.action
+			sequence.firstTarget = plan.target
+			sequence.firstEatTurn = plan.eatTurn
+		}
+		sequence.plans = append(sequence.plans, plan)
+
+		nextRemaining := remaining[:0]
+		for _, apple := range remaining {
+			if apple != plan.target {
+				nextRemaining = append(nextRemaining, apple)
+			}
+		}
+		remaining = append([]Point(nil), nextRemaining...)
+
+		state = plan.endState
+		currentTurn = plan.eatTurn
+	}
+
+	return sequence
+}
+
+func sequenceFromRoute(plan RoutePlan) PlannedSequence {
+	if !plan.ok || len(plan.path) == 0 {
+		return PlannedSequence{}
+	}
+	return PlannedSequence{
+		firstAction:  plan.path[0],
+		firstTarget:  plan.target,
+		firstEatTurn: plan.eatTurn,
+		plans:        []RoutePlan{plan},
+		ok:           true,
+	}
+}
+
+func committedRouteAction(bot Bot, route RoutePlan, immediateWorld World) (string, RoutePlan, bool) {
+	if !route.ok || len(route.path) == 0 {
+		return "", RoutePlan{}, false
+	}
+
+	facing := facingFromBody(bot.body)
+	for _, dir := range safeLegalDirs(bot.body[0], facing) {
+		if dir != route.path[0] {
+			continue
+		}
+		next, alive, _, _ := simulateMove(bot.body, facing, dir, immediateWorld)
+		if !alive || len(next.body) < len(bot.body) {
+			return "", RoutePlan{}, false
+		}
+
+		advanced := route
+		advanced.path = append([]string(nil), route.path[1:]...)
+		advanced.eatTurn--
+		advanced.steps--
+		if len(advanced.path) > 0 {
+			advanced.action = advanced.path[0]
+		} else {
+			advanced.action = ""
+		}
+		return dir, advanced, true
+	}
+
+	return "", RoutePlan{}, false
+}
+
+func repeatedMoveHorizon(start SimState, dir string, world World, limit int) int {
+	state := start
+	horizon := 0
+	for horizon < limit {
+		next, alive, ate, _ := simulateMove(state.body, state.facing, dir, world)
+		if !alive {
+			break
+		}
+		expectedLen := len(state.body)
+		if ate {
+			expectedLen++
+		}
+		if len(next.body) < expectedLen {
+			break
+		}
+		horizon++
+		state = next
+	}
+	return horizon
+}
+
+func evaluateMoves(bot Bot, world World) []MoveEval {
+	facing := facingFromBody(bot.body)
+	candidates := safeLegalDirs(bot.body[0], facing)
+	evals := make([]MoveEval, 0, len(candidates))
+	for _, dir := range candidates {
+		next, alive, ate, _ := simulateMove(bot.body, facing, dir, world)
+		ev := MoveEval{dir: dir, state: next, alive: alive}
+		if !alive {
+			evals = append(evals, ev)
+			continue
+		}
+		expectedLen := len(bot.body)
+		if ate {
+			expectedLen++
+		}
+		ev.headLoss = len(next.body) < expectedLen
+		ev.horizon = repeatedMoveHorizon(next, dir, world, collisionLookahead)
+		evals = append(evals, ev)
+	}
+	return evals
+}
+
+func bestCollisionAvoidingMove(evals []MoveEval) string {
+	best := ""
+	bestHorizon := -1
+	for _, ev := range evals {
+		if !ev.alive || ev.headLoss {
+			continue
+		}
+		if ev.horizon > bestHorizon {
+			bestHorizon = ev.horizon
+			best = ev.dir
+		}
+	}
+	return best
+}
+
+func jumpUpOrStay(bot Bot, evals []MoveEval) string {
+	for _, ev := range evals {
+		if ev.dir == DirUp && ev.alive && !ev.headLoss {
+			return ev.dir
+		}
+	}
+	for _, ev := range evals {
+		if ev.dir == DirUp && ev.alive {
+			return ev.dir
+		}
+	}
+	if best := bestCollisionAvoidingMove(evals); best != "" {
+		return best
+	}
+	facing := facingFromBody(bot.body)
+	for _, ev := range evals {
+		if ev.alive {
+			return ev.dir
+		}
+	}
+	return facing
+}
+
+func chooseThreeStageAction(bot Bot, preferred string, world World) string {
+	evals := evaluateMoves(bot, world)
+	if preferred != "" {
+		for _, ev := range evals {
+			if ev.dir != preferred {
+				continue
+			}
+			if ev.alive && !ev.headLoss {
+				return ev.dir
+			}
+			if best := bestCollisionAvoidingMove(evals); best != "" && best != preferred {
+				return best
+			}
+			if ev.alive {
+				return ev.dir
+			}
+			return jumpUpOrStay(bot, evals)
+		}
+		if best := bestCollisionAvoidingMove(evals); best != "" {
+			return best
+		}
+	}
+	return jumpUpOrStay(bot, evals)
+}
+
 // DirInfo holds precomputed data for a single movement direction.
 type DirInfo struct {
 	flood int
@@ -395,10 +1153,11 @@ func computeDirInfo(bot Bot, world World) map[string]*DirInfo {
 			for _, p := range next.body[1:] {
 				blocked[p] = true
 			}
-			di.flood, di.dists = floodFillWithDist(next.body[0], blocked)
+				di.flood, _ = floodFillWithDist(next.body[0], blocked)
+				di.dists = gridBFSDistBodyAware(next.body[0], blocked, len(next.body))
+			}
+			info[dir] = di
 		}
-		info[dir] = di
-	}
 	return info
 }
 
@@ -456,7 +1215,7 @@ func computeEnemyMinDists(enemies []Bot, allOccupied map[Point]bool, sources []P
 		for _, p := range enemy.body {
 			delete(eBlocked, p)
 		}
-		eDists := gridBFSDist(enemy.body[0], eBlocked)
+		eDists := gridBFSDistBodyAware(enemy.body[0], eBlocked, len(enemy.body))
 		for _, s := range sources {
 			if d, ok := eDists[s]; ok {
 				if existing, exists := result[s]; !exists || d < existing {
@@ -812,41 +1571,78 @@ func main() {
 			}
 		}
 
-		// Enemy danger zones
-		enemyDanger := make(map[Point]bool)
-		for _, enemy := range enemies {
-			head := enemy.body[0]
-			facing := facingFromBody(enemy.body)
-			for _, dir := range legalDirs(facing) {
-				enemyDanger[add(head, dirDelta[dir])] = true
+		cache := make(map[distCacheKey][]int)
+		currentSources := make(map[Point]bool, len(sources))
+		for _, src := range sources {
+			currentSources[src] = true
+		}
+		for id, route := range committedRoutes {
+			if !currentSources[route.target] || len(route.path) == 0 {
+				delete(committedRoutes, id)
 			}
 		}
 
-		// Enemy minimum distances to sources
-		enemyDists := computeEnemyMinDists(enemies, allOccupied, sources)
+		type botPlan struct {
+			bot      Bot
+			preview  PlannedSequence
+			assigned PlannedSequence
+			committed bool
+		}
 
-		// Sort bots: closest to any source gets first pick of targets
-		sort.Slice(mine, func(i, j int) bool {
-			di, dj := 9999, 9999
-			for _, s := range sources {
-				if d := dist(mine[i].body[0], s); d < di {
-					di = d
-				}
-				if d := dist(mine[j].body[0], s); d < dj {
-					dj = d
+		plans := make([]botPlan, len(mine))
+		reserved := make(map[Point]int)
+		for i, bot := range mine {
+			plans[i].bot = bot
+			if route, ok := committedRoutes[bot.id]; ok {
+				plans[i].preview = sequenceFromRoute(route)
+				plans[i].assigned = plans[i].preview
+				plans[i].committed = plans[i].assigned.ok
+				if plans[i].assigned.ok {
+					reserved[route.target] = route.eatTurn
+					continue
 				}
 			}
-			if di != dj {
-				return di < dj
+			plans[i].preview = buildAppleSequence(bot, sources, reserved, cache, turnDeadline)
+		}
+
+		sort.Slice(plans, func(i, j int) bool {
+			pi, pj := plans[i].preview, plans[j].preview
+			if pi.ok != pj.ok {
+				return pi.ok
 			}
-			return mine[i].id < mine[j].id
+			if !pi.ok {
+				return plans[i].bot.id < plans[j].bot.id
+			}
+			if pi.firstEatTurn != pj.firstEatTurn {
+				return pi.firstEatTurn < pj.firstEatTurn
+			}
+			if pi.firstTarget != pj.firstTarget {
+				if pi.firstTarget.x != pj.firstTarget.x {
+					return pi.firstTarget.x < pj.firstTarget.x
+				}
+				return pi.firstTarget.y < pj.firstTarget.y
+			}
+			return plans[i].bot.id < plans[j].bot.id
 		})
 
+		for i := range plans {
+			if plans[i].committed {
+				continue
+			}
+			plans[i].assigned = buildAppleSequence(plans[i].bot, sources, reserved, cache, turnDeadline)
+			if !plans[i].assigned.ok {
+				continue
+			}
+			for _, step := range plans[i].assigned.plans {
+				reserved[step.target] = step.eatTurn
+			}
+		}
+
 		var actions []string
-		claimed := make(map[Point]bool)
 		plannedHeads := make(map[Point]bool)
 
-		for _, bot := range mine {
+		for _, entry := range plans {
+			bot := entry.bot
 			otherOccupied := make(map[Point]bool, len(allOccupied)+len(plannedHeads))
 			for p := range allOccupied {
 				otherOccupied[p] = true
@@ -858,107 +1654,72 @@ func main() {
 				delete(otherOccupied, p)
 			}
 
-			world := World{
+			immediateWorld := World{
+				sources:  make(map[Point]bool, len(sources)),
 				occupied: otherOccupied,
-				danger:   enemyDanger,
+			}
+			for _, s := range sources {
+				immediateWorld.sources[s] = true
 			}
 
-			// Precompute per-direction info (simulation + flood fill + BFS distances)
-			dirInfo := computeDirInfo(bot, world)
+			preferred := ""
+			status := "jump-up"
+			target := "-"
+			eatTurn := -1
+			seqLen := 0
+			var activeRoute RoutePlan
+			activeRouteOK := false
 
-			// Filter sources: unclaimed, then competitive
-			available := filterSources(sources, claimed)
-			if len(available) == 0 {
-				available = sources
+			if route, ok := committedRoutes[bot.id]; ok && len(route.path) > 0 {
+				preferred = route.path[0]
+				activeRoute = route
+				activeRouteOK = true
+				status = "support-route"
+				target = fmt.Sprintf("%d,%d", route.target.x, route.target.y)
+				eatTurn = route.eatTurn
+				seqLen = 1
+			} else {
+				delete(committedRoutes, bot.id)
+				if entry.assigned.ok && len(entry.assigned.plans) > 0 && len(entry.assigned.plans[0].path) > 0 {
+					activeRoute = entry.assigned.plans[0]
+					activeRouteOK = true
+					preferred = activeRoute.path[0]
+					status = "support-route"
+					target = fmt.Sprintf("%d,%d", entry.assigned.firstTarget.x, entry.assigned.firstTarget.y)
+					eatTurn = entry.assigned.firstEatTurn
+					seqLen = len(entry.assigned.plans)
+				}
 			}
-			myDists := gridBFSDist(bot.body[0], otherOccupied)
-			competitive := filterCompetitiveSources(available, myDists, enemyDists)
 
-			// Decision pipeline
-			plan := findInstantEat(bot, world, competitive)
+			action := chooseThreeStageAction(bot, preferred, immediateWorld)
 
-			// Check if instant eat direction is safe
-			if plan.ok && !isSafeDir(plan.action, dirInfo, len(bot.body)) {
-				altPlan := findInstantEat(bot, world, available)
-				if altPlan.ok && isSafeDir(altPlan.action, dirInfo, len(bot.body)) {
-					plan = altPlan
+			if activeRouteOK && action == preferred {
+				if len(activeRoute.path) > 1 {
+					advanced := activeRoute
+					advanced.path = append([]string(nil), activeRoute.path[1:]...)
+					advanced.eatTurn--
+					advanced.steps--
+					advanced.action = advanced.path[0]
+					committedRoutes[bot.id] = advanced
 				} else {
-					plan.ok = false
+					delete(committedRoutes, bot.id)
 				}
+			} else if activeRouteOK {
+				delete(committedRoutes, bot.id)
+				if status == "support-route" {
+					status = "collision-avoid"
+				}
+			} else {
+				delete(committedRoutes, bot.id)
 			}
 
-			if !plan.ok {
-				maxDepth := 8
-				if len(bot.body) <= 5 {
-					maxDepth = 12
-				}
-				// Reduce depth if running low on time
-				remaining := time.Until(turnDeadline)
-				if remaining < 15*time.Millisecond {
-					maxDepth = 4
-				} else if remaining < 25*time.Millisecond {
-					maxDepth = 6
-				}
-				// Single BFS with all sources (competition handled via scoring)
-				plan = findPathAction(bot, world, available, maxDepth, dirInfo, enemyDists, turnDeadline)
-
-				// Safety check: if BFS direction has dangerously low flood, pick safest
-				if plan.ok && !isSafeDir(plan.action, dirInfo, len(bot.body)) {
-					bs := bestSafeDir(dirInfo)
-					if bs != "" && isSafeDir(bs, dirInfo, len(bot.body)) {
-						plan.action = bs
-					}
-				}
-			}
-			if !plan.ok {
-				plan = findGreedyAction(bot, world, available, dirInfo, enemies, enemyDists)
-			}
-			if !plan.ok || plan.action == "" {
-				plan.action = facingFromBody(bot.body)
+			if debug {
+				fmt.Fprintf(os.Stderr, "bot %d decision=%s action=%s target=%s eatTurn=%d seq=%d\n",
+					bot.id, status, action, target, eatTurn, seqLen)
 			}
 
-			// Final collision avoidance using dirInfo
-			head := bot.body[0]
-			nextHead := add(head, dirDelta[plan.action])
-			if isWall(nextHead) || otherOccupied[nextHead] {
-				bestDir := ""
-				bestFlood := -1
-				for dir, di := range dirInfo {
-					if !di.alive {
-						continue
-					}
-					target := add(head, dirDelta[dir])
-					if otherOccupied[target] {
-						continue
-					}
-					if di.flood > bestFlood {
-						bestFlood = di.flood
-						bestDir = dir
-					}
-				}
-				if bestDir != "" {
-					plan.action = bestDir
-				}
-			}
-
-			// Safety override: only when chosen direction is dangerously low
-			if di, ok := dirInfo[plan.action]; ok && di.alive {
-				if di.flood < len(bot.body)+2 {
-					bs := bestSafeDir(dirInfo)
-					if bs != "" && dirInfo[bs].flood >= len(bot.body)*3 {
-						plan.action = bs
-					}
-				}
-			}
-
-			if len(available) > 0 {
-				claimed[plan.target] = true
-			}
-
-			// Track planned head so subsequent allied bots avoid this cell
-			plannedHeads[add(bot.body[0], dirDelta[plan.action])] = true
-
-			actions = append(actions, fmt.Sprintf("%d %s", bot.id, plan.action))
+			plannedHeads[add(bot.body[0], dirDelta[action])] = true
+			actions = append(actions, fmt.Sprintf("%d %s", bot.id, action))
 		}
 
 		var output string

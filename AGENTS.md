@@ -18,6 +18,8 @@ internal/
 - Arena bots live in `agent/<name>/main.go`
 - Local matches should use external bot binaries; do not reintroduce in-process agent fallbacks
 - Default local opponent binary is `./bin/opponent`
+- Use `./tmp` for any temporary files, including tests, scripts, probes, and helpers
+- Use `./bin` as the target directory for builds
 ```shell
 # go manager
 go install golang.org/dl/go1.18.1@latest

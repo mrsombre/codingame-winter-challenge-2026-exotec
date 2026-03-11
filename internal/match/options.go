@@ -23,6 +23,7 @@ type ParsedArgs struct {
 	P1Bin       string
 	MaxTurns    int
 	LeagueLevel int
+	Debug       bool
 	Help        bool
 }
 
@@ -86,6 +87,8 @@ func parseArgs(args []string) (ParsedArgs, error) {
 			parsed.SeedIncrement = &n
 		case "--output-matches":
 			parsed.OutputMatches = true
+		case "--debug":
+			parsed.Debug = true
 		case "--max-turns":
 			i++
 			if i >= len(args) {
@@ -143,6 +146,10 @@ func parseArgs(args []string) (ParsedArgs, error) {
 	if !parsed.Help && parsed.P0Bin == "" {
 		return ParsedArgs{}, fmt.Errorf("--p0-bin is required")
 	}
+	if parsed.Debug {
+		parsed.Simulations = 1
+		parsed.Parallel = 1
+	}
 
 	return parsed, nil
 }
@@ -156,6 +163,7 @@ Options:
   --seed <N>           Base RNG seed (default: current time)
   --seedx <N>          Seed increment per match (seed_i = seed + i*N)
   --output-matches     Include per-match results in JSON output
+  --debug              Force one match and print map/turn trace to stderr
   --max-turns <N>      Maximum turns per match (default: 200)
   --league-level <N>   Game league level 1..4 (default: 4)
   --p0-bin <PATH>      Run player 0 as an external stdin/stdout bot binary

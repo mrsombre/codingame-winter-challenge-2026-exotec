@@ -8,6 +8,7 @@ P0 ?= $(LOGIC)
 P1 ?= opponent
 
 export GOCACHE := /private/tmp/claude-501/go-build
+export GOMAXPROCS := 1
 
 .PHONY: test build-agent build-opponent match match-bin clean
 

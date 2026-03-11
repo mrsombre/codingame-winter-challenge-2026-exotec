@@ -3,6 +3,8 @@ package match
 import (
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 
 	engine "codingame/internal/engine"
 )
@@ -21,6 +23,7 @@ type MatchOptions struct {
 	LeagueLevel int
 	P0Bin       string
 	P1Bin       string
+	Debug       bool
 }
 
 type Runner struct {
@@ -108,6 +111,9 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 	game := engine.NewGame(seed, runner.Options.LeagueLevel)
 	referee := engine.NewReferee(game, engine.NewCommandManager())
 	referee.Init(players)
+	if runner.Options.Debug {
+		printDebugMap(seed, game)
+	}
 
 	cleanup, err := attachCommandPlayers(runner.Options, players)
 	if err != nil {
@@ -125,6 +131,9 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 	turn := 0
 	for turn = 0; !referee.Ended() && turn < maxTurns; turn++ {
 		referee.ResetGameTurnData()
+		if runner.Options.Debug {
+			printDebugTurnState("start", turn, game)
+		}
 
 		for _, player := range players {
 			if player.IsDeactivated() || referee.ShouldSkipPlayerTurn(player) {
@@ -134,6 +143,9 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 				player.SendInputLine(line)
 			}
 			_ = player.Execute()
+			if runner.Options.Debug {
+				fmt.Fprintf(os.Stderr, "turn %d p%d output: %s\n", turn, player.GetIndex(), strings.Join(player.GetOutputs(), " | "))
+			}
 		}
 
 		handlePlayerCommands(players, referee)
@@ -143,6 +155,9 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 		}
 
 		referee.PerformGameUpdate(turn)
+		if runner.Options.Debug {
+			printDebugTurnState("after", turn, game)
+		}
 	}
 
 	if !referee.Ended() {
@@ -245,4 +260,54 @@ func lossReasonFor(player *engine.Player, winner, playerIndex int) LossReason {
 		return LossReasonScore
 	}
 	return LossReasonNone
+}
+
+func printDebugMap(seed int64, game *engine.Game) {
+	fmt.Fprintf(os.Stderr, "debug seed=%d map=%dx%d apples=%d\n", seed, game.Grid.Width, game.Grid.Height, len(game.Grid.Apples))
+	for y := 0; y < game.Grid.Height; y++ {
+		var row strings.Builder
+		for x := 0; x < game.Grid.Width; x++ {
+			if game.Grid.GetXY(x, y).Type == engine.TileWall {
+				row.WriteByte('#')
+			} else {
+				row.WriteByte('.')
+			}
+		}
+		fmt.Fprintln(os.Stderr, row.String())
+	}
+	fmt.Fprintln(os.Stderr, "initial birds:")
+	for _, bird := range game.AllBirds() {
+		fmt.Fprintf(os.Stderr, "  p%d bird %d: %s\n", bird.Owner.GetIndex(), bird.ID, debugBody(bird.Body))
+	}
+	fmt.Fprintln(os.Stderr, "initial apples:")
+	for _, apple := range game.Grid.Apples {
+		fmt.Fprintf(os.Stderr, "  %d %d\n", apple.X, apple.Y)
+	}
+}
+
+func printDebugTurnState(label string, turn int, game *engine.Game) {
+	fmt.Fprintf(os.Stderr, "turn %d %s\n", turn, label)
+	fmt.Fprintf(os.Stderr, "  apples (%d): %s\n", len(game.Grid.Apples), debugCoords(game.Grid.Apples))
+	for _, bird := range game.AllBirds() {
+		fmt.Fprintf(os.Stderr, "  p%d bird %d alive=%v body=%s\n", bird.Owner.GetIndex(), bird.ID, bird.Alive, debugBody(bird.Body))
+	}
+}
+
+func debugBody(body []engine.Coord) string {
+	parts := make([]string, len(body))
+	for i, c := range body {
+		parts[i] = fmt.Sprintf("%d,%d", c.X, c.Y)
+	}
+	return strings.Join(parts, ":")
+}
+
+func debugCoords(coords []engine.Coord) string {
+	if len(coords) == 0 {
+		return "-"
+	}
+	parts := make([]string, len(coords))
+	for i, c := range coords {
+		parts[i] = fmt.Sprintf("%d,%d", c.X, c.Y)
+	}
+	return strings.Join(parts, " ")
 }

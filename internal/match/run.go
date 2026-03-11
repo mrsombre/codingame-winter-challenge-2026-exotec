@@ -41,6 +41,7 @@ func Run(args []string, stdout io.Writer) error {
 		LeagueLevel: parsed.LeagueLevel,
 		P0Bin:       parsed.P0Bin,
 		P1Bin:       parsed.P1Bin,
+		Debug:       parsed.Debug,
 	})
 	results := runMatches(parsed.BatchOptions, runner.RunMatch)
 
