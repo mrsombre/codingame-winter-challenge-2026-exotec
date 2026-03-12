@@ -370,3 +370,267 @@ func BenchmarkMCEval3Variants(b *testing.B) {
 		_ = total
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Collision avoidance analysis: seed=-468706172918629800
+// Map: 20x11, walls at row 9 (partial) and row 10 (full)
+// Two head-on collision deaths:
+//   Turn 13: our bot 2 (len 3) vs enemy bot 4 (len 6) at (19,7) — bot 2 dies
+//   Turn 16: our bot 0 (len 3) vs enemy bot 5 (len 3) at (7,7) — both die
+// ---------------------------------------------------------------------------
+
+func buildCollisionGrid() *AGrid {
+	mapRows := []string{
+		"....................",
+		"....................",
+		"....................",
+		"....................",
+		"....................",
+		"....................",
+		"....................",
+		"....................",
+		"....................",
+		"....#..#....#..#....",
+		"####################",
+	}
+	walls := make(map[Point]bool)
+	for y, row := range mapRows {
+		for x, ch := range row {
+			if ch == '#' {
+				walls[Point{X: x, Y: y}] = true
+			}
+		}
+	}
+	return NewAG(20, 11, walls)
+}
+
+var collisionSources = []Point{
+	{11, 0}, {8, 0}, {16, 1}, {3, 1}, {4, 3}, {15, 3},
+}
+
+func TestMCCollisionAvoidance(t *testing.T) {
+	g := buildCollisionGrid()
+
+	// ================================================================
+	// Turn 13: Bot 2 (ours, len 3) vs Bot 4 (enemy, len 6) at (19,7)
+	// Our bot 2 at (19,8) facing RIGHT chose UP → (19,7)
+	// Enemy bot 4 at (18,7) facing RIGHT chose RIGHT → (19,7)
+	// ================================================================
+	t13Mine := []MyBotInfo{
+		{ID: 0, Body: []Point{{4, 8}, {3, 8}, {3, 9}}},
+		{ID: 1, Body: []Point{{13, 6}, {12, 6}, {11, 6}, {10, 6}, {10, 7}, {10, 8}, {10, 9}}},
+		{ID: 2, Body: []Point{{19, 8}, {18, 8}, {18, 9}}},
+	}
+	t13Enemies := []EnemyInfo{
+		{Head: Point{18, 7}, Facing: DirRight, BodyLen: 6,
+			Body: []Point{{18, 7}, {17, 7}, {16, 7}, {15, 7}, {15, 8}, {14, 8}}},
+		{Head: Point{3, 7}, Facing: DirRight, BodyLen: 3,
+			Body: []Point{{3, 7}, {2, 7}, {1, 7}}},
+	}
+
+	// Verify simulation catches head-on collision with actual enemy moves
+	t.Run("Turn13_SimConfirm", func(t *testing.T) {
+		var sim RollState
+		sim.Grid = g
+		sim.BotCount = 5
+		sim.Bots[0] = RollBot{ID: 0, Owner: 0, Alive: true, Body: NewBody(t13Mine[0].Body)}
+		sim.Bots[1] = RollBot{ID: 1, Owner: 0, Alive: true, Body: NewBody(t13Mine[1].Body)}
+		sim.Bots[2] = RollBot{ID: 2, Owner: 0, Alive: true, Body: NewBody(t13Mine[2].Body)}
+		sim.Bots[3] = RollBot{ID: -1, Owner: 1, Alive: true, Body: NewBody(t13Enemies[0].Body)}
+		sim.Bots[4] = RollBot{ID: -2, Owner: 1, Alive: true, Body: NewBody(t13Enemies[1].Body)}
+		rbFill(&sim.Apples, collisionSources, g.Width, g.Height)
+		sim.RebuildOcc()
+
+		var moves [MaxRollBots]Direction
+		moves[0] = DirRight // bot 0
+		moves[1] = DirRight // bot 1
+		moves[2] = DirUp    // bot 2 → (19,7) COLLISION
+		moves[3] = DirRight // enemy bot 4 → (19,7) COLLISION
+		moves[4] = DirRight // enemy bot 5
+		sim.SimTurn(&moves)
+
+		if sim.Bots[2].Alive {
+			t.Fatal("expected bot 2 dead from head-on collision at (19,7)")
+		}
+		if !sim.Bots[3].Alive {
+			t.Fatal("enemy bot 4 (len 6) should survive the collision")
+		}
+		t.Log("confirmed: bot 2 (len 3) dies vs bot 4 (len 6) at (19,7)")
+	})
+
+	// Show what RollPolicyDir predicts for enemy bot 4 across variants
+	t.Run("Turn13_EnemyPrediction", func(t *testing.T) {
+		s := NewState(g)
+		PrecomputeRollAppleDists(g, collisionSources)
+
+		var sim RollState
+		sim.Grid = g
+		sim.BotCount = 5
+		sim.Bots[0] = RollBot{ID: 0, Owner: 0, Alive: true, Body: NewBody(t13Mine[0].Body)}
+		sim.Bots[1] = RollBot{ID: 1, Owner: 0, Alive: true, Body: NewBody(t13Mine[1].Body)}
+		sim.Bots[2] = RollBot{ID: 2, Owner: 0, Alive: true, Body: NewBody(t13Mine[2].Body)}
+		sim.Bots[3] = RollBot{ID: -1, Owner: 1, Alive: true, Body: NewBody(t13Enemies[0].Body)}
+		sim.Bots[4] = RollBot{ID: -2, Owner: 1, Alive: true, Body: NewBody(t13Enemies[1].Body)}
+		rbFill(&sim.Apples, collisionSources, g.Width, g.Height)
+		sim.RebuildOcc()
+
+		rightPredicted := 0
+		for v := 0; v < 5; v++ {
+			d := RollPolicyDir(&s, &sim, 3, v) // enemy bot 4 (idx 3)
+			t.Logf("variant %d: enemy bot 4 predicted=%s (actual was RIGHT)", v, DirName[d])
+			if d == DirRight {
+				rightPredicted++
+			}
+		}
+		t.Logf("RIGHT predicted in %d/5 variants (need >0 for MCRefine to detect collision)", rightPredicted)
+	})
+
+	// Run MCRefine — does it override bot 2's UP?
+	t.Run("Turn13_MCRefine", func(t *testing.T) {
+		s := NewState(g)
+		plans := []SearchResult{
+			{Dir: DirRight, Target: Point{4, 3}, Ok: true},
+			{Dir: DirRight, Target: Point{15, 3}, Ok: true},
+			{Dir: DirUp, Target: Point{15, 3}, Ok: true}, // BAD: leads to collision
+		}
+
+		allOcc := NewBG(g.Width, g.Height)
+		for _, b := range t13Mine {
+			for _, p := range b.Body {
+				allOcc.Set(p)
+			}
+		}
+		for _, e := range t13Enemies {
+			for _, p := range e.Body {
+				allOcc.Set(p)
+			}
+		}
+
+		origPlans := make([]SearchResult, len(plans))
+		copy(origPlans, plans)
+		deadline := time.Now().Add(45 * time.Millisecond)
+		MCRefine(&s, t13Mine, t13Enemies, collisionSources, plans, &allOcc, deadline)
+
+		for i, p := range plans {
+			changed := ""
+			if p.Dir != origPlans[i].Dir {
+				changed = " CHANGED"
+			}
+			t.Logf("bot %d: %s -> %s%s", t13Mine[i].ID, DirName[origPlans[i].Dir], DirName[p.Dir], changed)
+		}
+		if plans[2].Dir == DirUp {
+			t.Error("MCRefine did NOT prevent collision: bot 2 still goes UP toward (19,7)")
+		} else {
+			t.Logf("MCRefine prevented collision: bot 2 changed to %s", DirName[plans[2].Dir])
+		}
+	})
+
+	// ================================================================
+	// Turn 16: Bot 0 (ours, len 3) vs Bot 5 (enemy, len 3) at (7,7)
+	// Our bot 0 at (7,8) facing RIGHT chose UP → (7,7)
+	// Enemy bot 5 at (6,7) facing RIGHT chose RIGHT → (7,7)
+	// ================================================================
+	t16Mine := []MyBotInfo{
+		{ID: 0, Body: []Point{{7, 8}, {6, 8}, {5, 8}}},
+		{ID: 1, Body: []Point{{15, 7}, {14, 7}, {14, 8}, {13, 8}, {12, 8}, {11, 8}, {10, 8}}},
+	}
+	t16Enemies := []EnemyInfo{
+		{Head: Point{20, 9}, Facing: DirRight, BodyLen: 5,
+			Body: []Point{{20, 9}, {19, 9}, {18, 9}, {17, 9}, {16, 9}}},
+		{Head: Point{6, 7}, Facing: DirRight, BodyLen: 3,
+			Body: []Point{{6, 7}, {5, 7}, {4, 7}}},
+	}
+
+	// Verify simulation catches mutual kill
+	t.Run("Turn16_SimConfirm", func(t *testing.T) {
+		var sim RollState
+		sim.Grid = g
+		sim.BotCount = 4
+		sim.Bots[0] = RollBot{ID: 0, Owner: 0, Alive: true, Body: NewBody(t16Mine[0].Body)}
+		sim.Bots[1] = RollBot{ID: 1, Owner: 0, Alive: true, Body: NewBody(t16Mine[1].Body)}
+		sim.Bots[2] = RollBot{ID: -1, Owner: 1, Alive: true, Body: NewBody(t16Enemies[0].Body)}
+		sim.Bots[3] = RollBot{ID: -2, Owner: 1, Alive: true, Body: NewBody(t16Enemies[1].Body)}
+		rbFill(&sim.Apples, collisionSources, g.Width, g.Height)
+		sim.RebuildOcc()
+
+		var moves [MaxRollBots]Direction
+		moves[0] = DirUp    // bot 0 → (7,7) COLLISION
+		moves[1] = DirUp    // bot 1
+		moves[2] = DirRight // enemy bot 4 (off-screen)
+		moves[3] = DirRight // enemy bot 5 → (7,7) COLLISION
+		sim.SimTurn(&moves)
+
+		if sim.Bots[0].Alive {
+			t.Fatal("expected bot 0 dead from head-on collision at (7,7)")
+		}
+		if sim.Bots[3].Alive {
+			t.Fatal("expected enemy bot 5 dead too (equal len 3)")
+		}
+		t.Log("confirmed: bot 0 and bot 5 both die (equal len 3) at (7,7)")
+	})
+
+	// Show what RollPolicyDir predicts for enemy bot 5
+	t.Run("Turn16_EnemyPrediction", func(t *testing.T) {
+		s := NewState(g)
+		PrecomputeRollAppleDists(g, collisionSources)
+
+		var sim RollState
+		sim.Grid = g
+		sim.BotCount = 4
+		sim.Bots[0] = RollBot{ID: 0, Owner: 0, Alive: true, Body: NewBody(t16Mine[0].Body)}
+		sim.Bots[1] = RollBot{ID: 1, Owner: 0, Alive: true, Body: NewBody(t16Mine[1].Body)}
+		sim.Bots[2] = RollBot{ID: -1, Owner: 1, Alive: true, Body: NewBody(t16Enemies[0].Body)}
+		sim.Bots[3] = RollBot{ID: -2, Owner: 1, Alive: true, Body: NewBody(t16Enemies[1].Body)}
+		rbFill(&sim.Apples, collisionSources, g.Width, g.Height)
+		sim.RebuildOcc()
+
+		rightPredicted := 0
+		for v := 0; v < 5; v++ {
+			d := RollPolicyDir(&s, &sim, 3, v) // enemy bot 5 (idx 3)
+			t.Logf("variant %d: enemy bot 5 predicted=%s (actual was RIGHT)", v, DirName[d])
+			if d == DirRight {
+				rightPredicted++
+			}
+		}
+		t.Logf("RIGHT predicted in %d/5 variants (need >0 for MCRefine to detect collision)", rightPredicted)
+	})
+
+	// Run MCRefine — does it override bot 0's UP?
+	t.Run("Turn16_MCRefine", func(t *testing.T) {
+		s := NewState(g)
+		plans := []SearchResult{
+			{Dir: DirUp, Target: Point{4, 3}, Ok: true}, // BAD: leads to collision
+			{Dir: DirUp, Target: Point{15, 3}, Ok: true},
+		}
+
+		allOcc := NewBG(g.Width, g.Height)
+		for _, b := range t16Mine {
+			for _, p := range b.Body {
+				allOcc.Set(p)
+			}
+		}
+		for _, e := range t16Enemies {
+			for _, p := range e.Body {
+				allOcc.Set(p)
+			}
+		}
+
+		origPlans := make([]SearchResult, len(plans))
+		copy(origPlans, plans)
+		deadline := time.Now().Add(45 * time.Millisecond)
+		MCRefine(&s, t16Mine, t16Enemies, collisionSources, plans, &allOcc, deadline)
+
+		for i, p := range plans {
+			changed := ""
+			if p.Dir != origPlans[i].Dir {
+				changed = " CHANGED"
+			}
+			t.Logf("bot %d: %s -> %s%s", t16Mine[i].ID, DirName[origPlans[i].Dir], DirName[p.Dir], changed)
+		}
+		if plans[0].Dir == DirUp {
+			t.Error("MCRefine did NOT prevent collision: bot 0 still goes UP toward (7,7)")
+		} else {
+			t.Logf("MCRefine prevented collision: bot 0 changed to %s", DirName[plans[0].Dir])
+		}
+	})
+}

@@ -683,6 +683,27 @@ func MCRefine(s *State, mine []MyBotInfo, enemies []EnemyInfo, sources []Point,
 	rbFill(&base.Apples, sources, g.Width, g.Height)
 	base.RebuildOcc()
 
+	// Precompute enemy threat zones: cells any enemy head could reach next turn.
+	// Used to penalize our first moves that land on contested cells,
+	// independent of the rollout policy's enemy move prediction.
+	type eThreat struct {
+		cell    Point
+		bodyLen int
+	}
+	var enemyThreats []eThreat
+	for _, enemy := range enemies {
+		facing := enemy.Facing
+		if facing == DirNone {
+			facing = DirUp
+		}
+		for _, d := range s.VMoves(enemy.Head, facing) {
+			np := Add(enemy.Head, DirDelta[d])
+			if !g.IsWall(np) {
+				enemyThreats = append(enemyThreats, eThreat{cell: np, bodyLen: enemy.BodyLen})
+			}
+		}
+	}
+
 	// Candidate first moves per bot: plan direction + up to 2 alternatives
 	const maxCands = 3
 	type candSet [maxCands]Direction
@@ -717,7 +738,32 @@ func MCRefine(s *State, mine []MyBotInfo, enemies []EnemyInfo, sources []Point,
 	// Evaluate a candidate first-move set by averaging rollout variants
 	const maxTeam = 4
 	eval := func(firstMoves [maxTeam]Direction) int {
-		total := 0
+		// Contested-cell penalty: penalize first moves into enemy threat zones.
+		// This catches head-on collision risk that the rollout policy may miss
+		// (policy predicts one enemy direction; enemy may choose another).
+		contestPen := 0
+		for k := 0; k < nMy; k++ {
+			mb := &base.Bots[myIdx[k]]
+			if !mb.Alive {
+				continue
+			}
+			dir := SanitizeRollDir(s, mb.Body, firstMoves[k])
+			dst := Add(mb.Body.Parts[0], DirDelta[dir])
+			for _, th := range enemyThreats {
+				if dst == th.cell {
+					if mb.Body.Len <= 3 {
+						// Fatal: we die entirely on collision
+						contestPen += 5000
+					} else if th.bodyLen > 3 {
+						// Both lose head — annoying but survivable
+						contestPen += 1000
+					}
+					// else: we're big, they're small — we survive, no penalty
+				}
+			}
+		}
+
+		total := -contestPen * numVariants
 		for v := 0; v < numVariants; v++ {
 			var sim RollState
 			sim.CopyFrom(&base)
