@@ -24,6 +24,7 @@ type ParsedArgs struct {
 	MaxTurns    int
 	LeagueLevel int
 	Debug       bool
+	Timing      bool
 	Help        bool
 }
 
@@ -89,6 +90,8 @@ func parseArgs(args []string) (ParsedArgs, error) {
 			parsed.OutputMatches = true
 		case "--debug":
 			parsed.Debug = true
+		case "--timing":
+			parsed.Timing = true
 		case "--max-turns":
 			i++
 			if i >= len(args) {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -24,14 +25,17 @@ func (e *timeoutError) Error() string {
 }
 
 type commandPlayer struct {
-	player     *engine.Player
-	path       string
-	cmd        *exec.Cmd
-	stdin      io.WriteCloser
-	stdout     *bufio.Reader
-	stderrDone chan struct{}
-	turns      int
-	writeMu    sync.Mutex
+	player       *engine.Player
+	path         string
+	cmd          *exec.Cmd
+	stdin        io.WriteCloser
+	stdout       *bufio.Reader
+	stderrDone   chan struct{}
+	turns        int
+	writeMu      sync.Mutex
+	timing       bool
+	playerIdx    int
+	lastDuration time.Duration
 }
 
 func newCommandPlayer(player *engine.Player, path string) (*commandPlayer, error) {
@@ -107,6 +111,7 @@ func (cp *commandPlayer) readCommandLine() (string, error) {
 	}
 
 	resultCh := make(chan readResult, 1)
+	start := time.Now()
 	go func() {
 		line, err := cp.stdout.ReadString('\n')
 		resultCh <- readResult{line: line, err: err}
@@ -114,11 +119,19 @@ func (cp *commandPlayer) readCommandLine() (string, error) {
 
 	select {
 	case result := <-resultCh:
+		cp.lastDuration = time.Since(start)
+		if cp.timing {
+			fmt.Fprintf(os.Stderr, "timing p%d turn %d: %s\n", cp.playerIdx, cp.turns, cp.lastDuration)
+		}
 		if result.err != nil {
 			return "", fmt.Errorf("external player read failed (%s): %w", cp.path, result.err)
 		}
 		return result.line, nil
 	case <-time.After(timeout):
+		cp.lastDuration = time.Since(start)
+		if cp.timing {
+			fmt.Fprintf(os.Stderr, "timing p%d turn %d: TIMEOUT after %s\n", cp.playerIdx, cp.turns, cp.lastDuration)
+		}
 		if cp.cmd != nil && cp.cmd.Process != nil {
 			_ = cp.cmd.Process.Kill()
 		}

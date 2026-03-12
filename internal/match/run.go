@@ -42,6 +42,7 @@ func Run(args []string, stdout io.Writer) error {
 		P0Bin:       parsed.P0Bin,
 		P1Bin:       parsed.P1Bin,
 		Debug:       parsed.Debug,
+		Timing:      parsed.Timing,
 	})
 	results := runMatches(parsed.BatchOptions, runner.RunMatch)
 

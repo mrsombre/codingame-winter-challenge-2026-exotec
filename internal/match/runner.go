@@ -24,6 +24,7 @@ type MatchOptions struct {
 	P0Bin       string
 	P1Bin       string
 	Debug       bool
+	Timing      bool
 }
 
 type Runner struct {
@@ -203,6 +204,8 @@ func attachCommandPlayers(options MatchOptions, players []*engine.Player) (func(
 			}
 			return nil, fmt.Errorf("failed to start player %d session: %w", i, err)
 		}
+		cp.playerIdx = i
+		cp.timing = options.Timing
 		players[i].SetExecuteFunc(cp.Execute)
 		controllers = append(controllers, cp)
 	}
