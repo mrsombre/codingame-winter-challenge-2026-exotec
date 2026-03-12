@@ -142,70 +142,12 @@ func (g *AGrid) CIdx(p Point) int { return p.Y*g.Width + p.X }
 
 const MaxBody = 80
 
-type Body struct {
-	Parts [MaxBody]Point
-	Len   int
-}
-
-func NewBody(points []Point) Body {
-	var b Body
-	b.Set(points)
-	return b
-}
-func (b *Body) Set(points []Point) {
-	if len(points) > MaxBody {
-		panic("body too large")
-	}
-	b.Len = len(points)
-	copy(b.Parts[:b.Len], points)
-}
-func (b *Body) Reset()        { b.Len = 0 }
-func (b Body) Slice() []Point { return b.Parts[:b.Len] }
-func (b Body) Head() (Point, bool) {
-	if b.Len == 0 {
-		return Point{}, false
-	}
-	return b.Parts[0], true
-}
-func (b Body) Tail() (Point, bool) {
-	if b.Len == 0 {
-		return Point{}, false
-	}
-	return b.Parts[b.Len-1], true
-}
-func (b Body) Facing() Direction {
-	if b.Len < 2 {
-		return DirNone
-	}
-	return FacingPts(b.Parts[0], b.Parts[1])
-}
-func (b Body) Contains(p Point) bool {
-	for i := 0; i < b.Len; i++ {
-		if b.Parts[i] == p {
-			return true
-		}
-	}
-	return false
-}
-func (b *Body) Copy(other Body) {
-	b.Len = other.Len
-	copy(b.Parts[:b.Len], other.Parts[:other.Len])
-}
-
-type Bot struct {
-	ID, Owner int
-	Alive     bool
-	Body      Body
-}
-
 type State struct {
-	Grid     *AGrid
-	Terr     *STerrain
-	Apples   BitGrid
-	Bots     []Bot
-	MvBuf    [4]Direction
-	DistVals []int
-	DistQ    []Point
+	Grid   *AGrid
+	Terr   *STerrain
+	Apples BitGrid
+	MvBuf  [4]Direction
+	DistQ  []Point
 }
 
 func NewState(grid *AGrid) State {
@@ -214,7 +156,6 @@ func NewState(grid *AGrid) State {
 		n := grid.Width * grid.Height
 		s.Terr = NewSTerrain(grid)
 		s.Apples = NewBG(grid.Width, grid.Height)
-		s.DistVals = make([]int, n)
 		s.DistQ = make([]Point, 0, n)
 	}
 	return s
@@ -275,8 +216,6 @@ func (b *IBuf) Seen(key int) bool { return b.Visited[key] == b.Gen }
 type SBBuf struct {
 	Visited []uint32
 	Gen     uint32
-	PrevSt  []int32
-	PrevGen []uint32
 	Buckets [][]SBEntry
 	MaxLen  int
 }
@@ -285,19 +224,10 @@ type SBEntry struct {
 	Run  int
 	Dist int
 }
-type SBResult struct {
-	Waypoints []Point
-	Approach  Point
-	MinLen    int
-	Dist      int
-}
 
 func (b *SBBuf) Init(cells, maxLen int) {
 	b.MaxLen = maxLen
-	n := cells * (maxLen + 1)
-	b.Visited = make([]uint32, n)
-	b.PrevSt = make([]int32, n)
-	b.PrevGen = make([]uint32, n)
+	b.Visited = make([]uint32, cells*(maxLen+1))
 	b.Buckets = make([][]SBEntry, maxLen+1)
 }
 func (b *SBBuf) Reset() {
@@ -305,9 +235,6 @@ func (b *SBBuf) Reset() {
 	if b.Gen == 0 {
 		for i := range b.Visited {
 			b.Visited[i] = 0
-		}
-		for i := range b.PrevGen {
-			b.PrevGen[i] = 0
 		}
 		b.Gen = 1
 	}
@@ -317,16 +244,6 @@ func (b *SBBuf) Reset() {
 }
 func (b *SBBuf) Mark(key int)      { b.Visited[key] = b.Gen }
 func (b *SBBuf) Seen(key int) bool { return b.Visited[key] == b.Gen }
-func (b *SBBuf) SetPrev(key int, prev int32) {
-	b.PrevSt[key] = prev
-	b.PrevGen[key] = b.Gen
-}
-func (b *SBBuf) GetPrev(key int) (int32, bool) {
-	if b.PrevGen[key] != b.Gen {
-		return -1, false
-	}
-	return b.PrevSt[key], true
-}
 
 type STerrain struct {
 	Grid    *AGrid
@@ -338,7 +255,6 @@ type STerrain struct {
 	MinLen  []int
 	ImmBuf  IBuf
 	SBBuf   SBBuf
-	WallSup []Point
 }
 
 func adjCells(g *AGrid, target Point) ([4]Point, int) {
@@ -410,19 +326,6 @@ func NewSTerrain(grid *AGrid) *STerrain {
 				t.CompID[next] = cid
 				queue = append(queue, next)
 			}
-		}
-	}
-	for y := 1; y < grid.Height; y++ {
-		for x := 0; x < grid.Width; x++ {
-			sup := Point{x, y}
-			if !grid.IsWall(sup) {
-				continue
-			}
-			stand := Point{x, y - 1}
-			if grid.IsWall(stand) {
-				continue
-			}
-			t.WallSup = append(t.WallSup, sup)
 		}
 	}
 	t.CMinLen()
@@ -586,13 +489,13 @@ func (t *STerrain) BodyInitRun(body []Point) int {
 	}
 	return -1
 }
-func (t *STerrain) SupPathBFS(start Point, initRun int, target Point, apples *BitGrid) *SBResult {
+func (t *STerrain) SupPathBFS(start Point, initRun int, target Point, apples *BitGrid) int {
 	if t.Grid.IsWall(target) || t.Grid.IsWall(start) {
-		return nil
+		return Unreachable
 	}
 	adj, adjN := adjCells(t.Grid, target)
 	if adjN == 0 {
-		return nil
+		return Unreachable
 	}
 	if initRun < 1 {
 		initRun = 1
@@ -600,22 +503,19 @@ func (t *STerrain) SupPathBFS(start Point, initRun int, target Point, apples *Bi
 	buf := &t.SBBuf
 	maxLen := buf.MaxLen
 	if initRun > maxLen {
-		return nil
+		return Unreachable
 	}
-	w := t.Grid.Width
 	stride := maxLen + 1
 	buf.Reset()
 	sKey := t.Grid.CIdx(start)*stride + initRun
 	buf.Mark(sKey)
-	buf.SetPrev(sKey, -1)
 	buf.Buckets[initRun] = append(buf.Buckets[initRun], SBEntry{start, initRun, 0})
 	for L := initRun; L <= maxLen; L++ {
 		for i := 0; i < len(buf.Buckets[L]); i++ {
 			cur := buf.Buckets[L][i]
-			curKey := t.Grid.CIdx(cur.Pos)*stride + cur.Run
 			for a := 0; a < adjN; a++ {
 				if cur.Pos == adj[a] {
-					return t.sbReconstruct(curKey, w, stride, cur.Pos, L, cur.Dist)
+					return L
 				}
 			}
 			for dir := DirUp; dir <= DirLeft; dir++ {
@@ -635,7 +535,6 @@ func (t *STerrain) SupPathBFS(start Point, initRun int, target Point, apples *Bi
 					continue
 				}
 				buf.Mark(nKey)
-				buf.SetPrev(nKey, int32(curKey))
 				cost := L
 				if nr > L {
 					cost = nr
@@ -644,28 +543,89 @@ func (t *STerrain) SupPathBFS(start Point, initRun int, target Point, apples *Bi
 			}
 		}
 	}
-	return nil
+	return Unreachable
 }
-func (t *STerrain) sbReconstruct(goalKey, w, stride int, approach Point, minLen, dist int) *SBResult {
-	buf := &t.SBBuf
-	waypoints := make([]Point, 0, 8)
-	k := goalKey
-	for {
-		posIdx := k / stride
-		pos := Point{posIdx % w, posIdx / w}
-		if t.Grid.WBelow(pos) {
-			waypoints = append(waypoints, pos)
-		}
-		prev, ok := buf.GetPrev(k)
-		if !ok || prev == -1 {
-			break
-		}
-		k = int(prev)
+
+func (t *STerrain) SupReachMulti(start Point, initRun, maxBodyLen int, targets []Point, apples *BitGrid) []Point {
+	g := t.Grid
+	if g.IsWall(start) || len(targets) == 0 {
+		return nil
 	}
-	for i, j := 0, len(waypoints)-1; i < j; i, j = i+1, j-1 {
-		waypoints[i], waypoints[j] = waypoints[j], waypoints[i]
+	if initRun < 1 {
+		initRun = 1
 	}
-	return &SBResult{waypoints, approach, minLen, dist}
+
+	buf := &t.ImmBuf
+	capLen := maxBodyLen
+	if capLen > buf.MaxLen {
+		capLen = buf.MaxLen
+	}
+	if initRun > capLen {
+		return nil
+	}
+
+	tgtBG := NewBG(g.Width, g.Height)
+	remaining := 0
+	for _, tgt := range targets {
+		if !g.IsWall(tgt) {
+			tgtBG.Set(tgt)
+			remaining++
+		}
+	}
+	if remaining == 0 {
+		return nil
+	}
+
+	stride := buf.MaxLen + 1
+	buf.Reset()
+
+	sKey := g.CIdx(start)*stride + initRun
+	buf.Mark(sKey)
+	buf.Buckets[initRun] = append(buf.Buckets[initRun], ImmSt{start, initRun, 0})
+
+	var result []Point
+
+	for L := initRun; L <= capLen; L++ {
+		for i := 0; i < len(buf.Buckets[L]); i++ {
+			cur := buf.Buckets[L][i]
+
+			for dir := DirUp; dir <= DirLeft; dir++ {
+				next := Add(cur.Pos, DirDelta[dir])
+
+				if tgtBG.Has(next) {
+					tgtBG.Clear(next)
+					result = append(result, next)
+					remaining--
+					if remaining == 0 {
+						return result
+					}
+				}
+
+				if g.IsWall(next) {
+					continue
+				}
+				nr := cur.Run + 1
+				if g.WBelow(next) || (apples != nil && apples.Has(Point{next.X, next.Y + 1})) {
+					nr = 1
+				}
+				if nr > capLen {
+					continue
+				}
+				nKey := g.CIdx(next)*stride + nr
+				if buf.Seen(nKey) {
+					continue
+				}
+				buf.Mark(nKey)
+				cost := L
+				if nr > L {
+					cost = nr
+				}
+				buf.Buckets[cost] = append(buf.Buckets[cost], ImmSt{next, nr, cur.Dist + 1})
+			}
+		}
+	}
+
+	return result
 }
 
 func fillBG(bg *BitGrid, pts []Point) {
@@ -835,9 +795,12 @@ func floodDist(start Point, blocked *BitGrid) (int, []int) {
 	return count, dist
 }
 
-func legalDirs(facing Direction) [3]Direction {
+func validDirs(facing Direction) ([4]Direction, int) {
+	if facing == DirNone {
+		return [4]Direction{DirUp, DirRight, DirDown, DirLeft}, 4
+	}
 	back := Opp(facing)
-	var out [3]Direction
+	var out [4]Direction
 	n := 0
 	for d := DirUp; d <= DirLeft; d++ {
 		if d != back {
@@ -845,7 +808,7 @@ func legalDirs(facing Direction) [3]Direction {
 			n++
 		}
 	}
-	return out
+	return out, n
 }
 
 func srcScore(head, target Point) int {
@@ -966,20 +929,6 @@ func actionString(id int, dir Direction, reason string) string {
 		return fmt.Sprintf("%d %s %s", id, DirName[dir], reason)
 	}
 	return fmt.Sprintf("%d %s", id, DirName[dir])
-}
-
-func commandDirs(facing Direction) []Direction {
-	if facing == DirNone {
-		return []Direction{DirUp, DirRight, DirDown, DirLeft}
-	}
-	back := Opp(facing)
-	out := make([]Direction, 0, 3)
-	for d := DirUp; d <= DirLeft; d++ {
-		if d != back {
-			out = append(out, d)
-		}
-	}
-	return out
 }
 
 type localBird struct {
@@ -1241,8 +1190,9 @@ func worstCasePlanRisk(mine []botEntry, enemies []enemyInfo, sources []Point, ou
 			}
 			return
 		}
-		for _, dir := range commandDirs(enemies[idx].facing) {
-			enemyDirs[idx] = dir
+		dirs, nd := validDirs(enemies[idx].facing)
+		for di := 0; di < nd; di++ {
+			enemyDirs[idx] = dirs[di]
 			walk(idx + 1)
 		}
 	}
@@ -1257,7 +1207,8 @@ func refinePlansWithOneTurnSafety(mine []botEntry, enemies []enemyInfo, sources 
 
 	combos := 1
 	for _, enemy := range enemies {
-		combos *= len(commandDirs(enemy.facing))
+		_, nd := validDirs(enemy.facing)
+		combos *= nd
 		if combos > 128 {
 			return
 		}
@@ -1274,7 +1225,8 @@ func refinePlansWithOneTurnSafety(mine []botEntry, enemies []enemyInfo, sources 
 			break
 		}
 		currentDir := ourDirs[i]
-		for _, dir := range commandDirs(plans[i].facing) {
+		dirs, nd := validDirs(plans[i].facing)
+		for _, dir := range dirs[:nd] {
 			if dir == currentDir {
 				continue
 			}
@@ -1445,20 +1397,11 @@ func bestAction(body []Point, facing Direction, sources []Point,
 	bodyLen := len(body)
 
 	initRun := state.Terr.BodyInitRun(body)
-	type srcCand struct {
-		pt   Point
-		dist int
-	}
-	var reachable []srcCand
-	for _, s := range sources {
-		res := state.Terr.SupPathBFS(head, initRun, s, srcBG)
-		if res != nil && res.MinLen <= bodyLen {
-			reachable = append(reachable, srcCand{s, res.Dist})
-		}
-	}
+	reachable := state.Terr.SupReachMulti(head, initRun, bodyLen, sources, srcBG)
 
 	var best SearchResult
-	for _, dir := range legalDirs(facing) {
+	vd1, nd1 := validDirs(facing)
+	for _, dir := range vd1[:nd1] {
 		nb, _, alive, ate, eatenAt := simMove(body, facing, dir, srcBG, occupied)
 		if !alive {
 			continue
@@ -1473,13 +1416,13 @@ func bestAction(body []Point, facing Direction, sources []Point,
 			for _, c := range reachable {
 				var d int
 				if useBFS {
-					d = di.dists[c.pt.Y*W+c.pt.X]
+					d = di.dists[c.Y*W+c.X]
 				} else {
-					d = srcScore(nb[0], c.pt)
+					d = srcScore(nb[0], c)
 				}
 				if d < bestDist {
 					bestDist = d
-					bestTarget = c.pt
+					bestTarget = c
 				}
 			}
 		} else {
@@ -1525,7 +1468,8 @@ func bestAction(body []Point, facing Direction, sources []Point,
 			}
 			for _, e := range enemies {
 				canReach := false
-				for _, edir := range legalDirs(e.facing) {
+				evd, end := validDirs(e.facing)
+				for _, edir := range evd[:end] {
 					if Add(e.head, DirDelta[edir]) == nb[0] {
 						canReach = true
 						break
@@ -1586,8 +1530,8 @@ func bestGroundAction(body []Point, facing Direction, target Point,
 
 	bodyLen := len(body)
 	var best SearchResult
-
-	for _, dir := range legalDirs(facing) {
+	vd2, nd2 := validDirs(facing)
+	for _, dir := range vd2[:nd2] {
 		nb, _, alive, ate, eatenAt := simMove(body, facing, dir, srcBG, occupied)
 		if !alive {
 			continue
@@ -1622,7 +1566,8 @@ func bestGroundAction(body []Point, facing Direction, target Point,
 			}
 			for _, e := range enemies {
 				canReach := false
-				for _, edir := range legalDirs(e.facing) {
+				evd2, end2 := validDirs(e.facing)
+				for _, edir := range evd2[:end2] {
 					if Add(e.head, DirDelta[edir]) == nb[0] {
 						canReach = true
 						break
@@ -1721,12 +1666,8 @@ func planSupportJobs(mine []botEntry, preferred [][]Point, sources []Point, botD
 		if len(targets) == 0 {
 			targets = limitedSupportTargets(sources)
 		}
-		for _, s := range targets {
-			res := state.Terr.SupPathBFS(bot.body[0], initRun, s, &srcBG)
-			if res != nil && res.MinLen <= bodyLen {
-				hasReachable[i] = true
-				break
-			}
+		if len(state.Terr.SupReachMulti(bot.body[0], initRun, bodyLen, targets, &srcBG)) > 0 {
+			hasReachable[i] = true
 		}
 	}
 
@@ -1768,8 +1709,8 @@ func planSupportJobs(mine []botEntry, preferred [][]Point, sources []Point, botD
 				if time.Until(deadline) < 8*time.Millisecond {
 					break
 				}
-				base := state.Terr.SupPathBFS(mine[climber].body[0], state.Terr.BodyInitRun(mine[climber].body), apple, &srcBG)
-				if base != nil && base.MinLen <= climberLen {
+				minLen := state.Terr.SupPathBFS(mine[climber].body[0], state.Terr.BodyInitRun(mine[climber].body), apple, &srcBG)
+				if minLen <= climberLen {
 					continue
 				}
 
@@ -1800,13 +1741,7 @@ func planSupportJobs(mine []botEntry, preferred [][]Point, sources []Point, botD
 						score += climbDist * 8
 						score += MDist(mine[climber].body[0], cell) * 6
 						score -= apple.Y * 25
-						if dx != 0 {
-							if dx < 0 {
-								score += -dx * 10
-							} else {
-								score += dx * 10
-							}
-						}
+						score += abs(dx) * 10
 						if grid.WBelow(cell) {
 							score -= 15
 						}
@@ -1943,7 +1878,8 @@ func main() {
 
 		eDanger := NewBG(W, H)
 		for _, e := range enemies {
-			for _, d := range legalDirs(e.facing) {
+			ed, edn := validDirs(e.facing)
+			for _, d := range ed[:edn] {
 				eDanger.Set(Add(e.head, DirDelta[d]))
 			}
 		}
