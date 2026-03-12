@@ -118,6 +118,85 @@ func TestSupPathBFS_AdjacentTarget(t *testing.T) {
 	assert.Zero(t, result.Dist)
 }
 
+// TestSupReachMulti_MatchesPerTarget verifies SupReachMulti returns the same
+// set of reachable targets as calling SupPathBFS per target with MinLen <= bodyLen.
+func TestSupReachMulti_MatchesPerTarget(t *testing.T) {
+	state, apples, spawns := stateFromSeed(2248502322264711400, 1)
+	require.NotEmpty(t, spawns)
+
+	body := spawns[0]
+	head := body[0]
+	initRun := state.Terr.BodyInitRun(body)
+	bodyLen := len(body)
+
+	// Old approach: per-target SupPathBFS.
+	var oldReach []Point
+	for _, apple := range apples {
+		res := state.Terr.SupPathBFS(head, initRun, apple, &state.Apples)
+		if res != nil && res.MinLen <= bodyLen {
+			oldReach = append(oldReach, apple)
+		}
+	}
+
+	// New approach: single multi-target BFS.
+	newReach := state.Terr.SupReachMulti(head, initRun, bodyLen, apples, &state.Apples)
+
+	// Sort both for comparison.
+	sortPts := func(pts []Point) {
+		sort.Slice(pts, func(i, j int) bool {
+			if pts[i].Y != pts[j].Y {
+				return pts[i].Y < pts[j].Y
+			}
+			return pts[i].X < pts[j].X
+		})
+	}
+	sortPts(oldReach)
+	sortPts(newReach)
+
+	t.Logf("bodyLen=%d oldReach=%d newReach=%d", bodyLen, len(oldReach), len(newReach))
+	assert.Equal(t, oldReach, newReach, "SupReachMulti must match per-target SupPathBFS results")
+}
+
+func TestSupReachMulti_Seed1001(t *testing.T) {
+	state := stateFromLayout(seed1001Layout, seed1001Apples)
+	body := []Point{
+		{X: 14, Y: 14}, {X: 14, Y: 13}, {X: 13, Y: 13},
+		{X: 12, Y: 13}, {X: 12, Y: 14},
+	}
+	head := body[0]
+	initRun := state.Terr.BodyInitRun(body)
+	bodyLen := len(body)
+
+	srcBG := NewBG(state.Grid.Width, state.Grid.Height)
+	FillBG(&srcBG, seed1001Apples)
+
+	// Old.
+	var oldReach []Point
+	for _, apple := range seed1001Apples {
+		res := state.Terr.SupPathBFS(head, initRun, apple, &srcBG)
+		if res != nil && res.MinLen <= bodyLen {
+			oldReach = append(oldReach, apple)
+		}
+	}
+
+	// New.
+	newReach := state.Terr.SupReachMulti(head, initRun, bodyLen, seed1001Apples, &srcBG)
+
+	sortPts := func(pts []Point) {
+		sort.Slice(pts, func(i, j int) bool {
+			if pts[i].Y != pts[j].Y {
+				return pts[i].Y < pts[j].Y
+			}
+			return pts[i].X < pts[j].X
+		})
+	}
+	sortPts(oldReach)
+	sortPts(newReach)
+
+	t.Logf("bodyLen=%d oldReach=%d newReach=%d", bodyLen, len(oldReach), len(newReach))
+	assert.Equal(t, oldReach, newReach)
+}
+
 func TestBodyInitRun(t *testing.T) {
 	state, _, spawns := stateFromSeed(2248502322264711400, 1)
 

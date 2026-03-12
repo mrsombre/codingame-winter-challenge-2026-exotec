@@ -252,17 +252,7 @@ func (s *State) BestAction(body []Point, facing Direction, sources []Point,
 	W := s.Grid.Width
 
 	initRun := s.Terr.BodyInitRun(body)
-	type srcCand struct {
-		pt   Point
-		dist int
-	}
-	var reachable []srcCand
-	for _, src := range sources {
-		res := s.Terr.SupPathBFS(head, initRun, src, srcBG)
-		if res != nil && res.MinLen <= bodyLen {
-			reachable = append(reachable, srcCand{src, res.Dist})
-		}
-	}
+	reachable := s.Terr.SupReachMulti(head, initRun, bodyLen, sources, srcBG)
 
 	var best SearchResult
 	for _, dir := range LegalDirs(facing) {
@@ -280,13 +270,13 @@ func (s *State) BestAction(body []Point, facing Direction, sources []Point,
 			for _, c := range reachable {
 				var d int
 				if useBFS {
-					d = di.Dists[c.pt.Y*W+c.pt.X]
+					d = di.Dists[c.Y*W+c.X]
 				} else {
-					d = SrcScore(s.Grid, nb[0], c.pt)
+					d = SrcScore(s.Grid, nb[0], c)
 				}
 				if d < bestDist {
 					bestDist = d
-					bestTarget = c.pt
+					bestTarget = c
 				}
 			}
 		} else {

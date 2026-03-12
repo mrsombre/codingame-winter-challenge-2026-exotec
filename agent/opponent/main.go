@@ -919,6 +919,28 @@ type SearchResult struct {
 	ok     bool
 }
 
+type botPlan struct {
+	id     int
+	body   []Point
+	facing Direction
+	dir    Direction
+	target Point
+	reason string
+	ok     bool
+}
+
+type botEntry struct {
+	id   int
+	body []Point
+}
+
+type supportJob struct {
+	climberID int
+	apple     Point
+	cell      Point
+	score     int
+}
+
 func stateHash(facing Direction, body []Point) uint64 {
 	h := uint64(14695981039346656037)
 	h ^= uint64(facing)
@@ -932,6 +954,345 @@ func stateHash(facing Direction, body []Point) uint64 {
 	return h
 }
 
+func bodyFacing(body []Point) Direction {
+	if len(body) < 2 {
+		return DirUp
+	}
+	return FacingPts(body[0], body[1])
+}
+
+func actionString(id int, dir Direction, reason string) string {
+	if debug && reason != "" {
+		return fmt.Sprintf("%d %s %s", id, DirName[dir], reason)
+	}
+	return fmt.Sprintf("%d %s", id, DirName[dir])
+}
+
+func commandDirs(facing Direction) []Direction {
+	if facing == DirNone {
+		return []Direction{DirUp, DirRight, DirDown, DirLeft}
+	}
+	back := Opp(facing)
+	out := make([]Direction, 0, 3)
+	for d := DirUp; d <= DirLeft; d++ {
+		if d != back {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+type localBird struct {
+	owner  int
+	body   []Point
+	facing Direction
+	alive  bool
+}
+
+type oneTurnOutcome struct {
+	losses  [2]int
+	deaths  [2]int
+	trapped [2]int
+}
+
+func bodyContains(body []Point, target Point) bool {
+	for _, p := range body {
+		if p == target {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTileOrAppleUnderLocal(c Point, apples *BitGrid) bool {
+	below := Point{c.X, c.Y + 1}
+	if grid.InB(below) && grid.IsWall(below) {
+		return true
+	}
+	return apples != nil && apples.Has(below)
+}
+
+func isGroundedLocal(c Point, grounded []bool, birds []localBird, apples *BitGrid) bool {
+	if hasTileOrAppleUnderLocal(c, apples) {
+		return true
+	}
+	below := Point{c.X, c.Y + 1}
+	for i, ok := range grounded {
+		if ok && birds[i].alive && bodyContains(birds[i].body, below) {
+			return true
+		}
+	}
+	return false
+}
+
+func simulateOneTurn(mine []botEntry, enemies []enemyInfo, ourDirs, enemyDirs []Direction, sources []Point) oneTurnOutcome {
+	birds := make([]localBird, 0, len(mine)+len(enemies))
+	for _, bot := range mine {
+		body := append([]Point(nil), bot.body...)
+		birds = append(birds, localBird{owner: 0, body: body, facing: bodyFacing(body), alive: true})
+	}
+	for _, enemy := range enemies {
+		body := append([]Point(nil), enemy.body...)
+		birds = append(birds, localBird{owner: 1, body: body, facing: enemy.facing, alive: true})
+	}
+
+	apples := NewBG(W, H)
+	fillBG(&apples, sources)
+
+	for i := range birds {
+		if !birds[i].alive || len(birds[i].body) == 0 {
+			continue
+		}
+		var dir Direction
+		if i < len(mine) {
+			dir = ourDirs[i]
+		} else {
+			dir = enemyDirs[i-len(mine)]
+		}
+		if dir == DirNone {
+			dir = birds[i].facing
+		}
+		if dir == DirNone {
+			continue
+		}
+
+		head := birds[i].body[0]
+		newHead := Add(head, DirDelta[dir])
+		willEat := apples.Has(newHead)
+		nextBody := make([]Point, 0, len(birds[i].body)+1)
+		nextBody = append(nextBody, newHead)
+		if willEat {
+			nextBody = append(nextBody, birds[i].body...)
+		} else {
+			nextBody = append(nextBody, birds[i].body[:len(birds[i].body)-1]...)
+		}
+		birds[i].body = nextBody
+	}
+
+	eaten := make([]Point, 0, len(birds))
+	for i := range birds {
+		if birds[i].alive && len(birds[i].body) > 0 && apples.Has(birds[i].body[0]) {
+			eaten = append(eaten, birds[i].body[0])
+		}
+	}
+	for _, apple := range eaten {
+		apples.Clear(apple)
+	}
+
+	var outcome oneTurnOutcome
+	toBehead := make([]bool, len(birds))
+	for i := range birds {
+		if !birds[i].alive || len(birds[i].body) == 0 {
+			continue
+		}
+		head := birds[i].body[0]
+		if grid.IsWall(head) {
+			toBehead[i] = true
+			continue
+		}
+		for j := range birds {
+			if !birds[j].alive || len(birds[j].body) == 0 {
+				continue
+			}
+			if !bodyContains(birds[j].body, head) {
+				continue
+			}
+			if i != j {
+				toBehead[i] = true
+				break
+			}
+			for _, part := range birds[j].body[1:] {
+				if part == head {
+					toBehead[i] = true
+					break
+				}
+			}
+			if toBehead[i] {
+				break
+			}
+		}
+	}
+	for i, behead := range toBehead {
+		if !behead {
+			continue
+		}
+		if len(birds[i].body) <= 3 {
+			outcome.losses[birds[i].owner] += len(birds[i].body)
+			outcome.deaths[birds[i].owner]++
+			birds[i].alive = false
+			continue
+		}
+		outcome.losses[birds[i].owner]++
+		birds[i].body = birds[i].body[1:]
+	}
+
+	airborne := make([]bool, len(birds))
+	grounded := make([]bool, len(birds))
+	for i := range birds {
+		airborne[i] = birds[i].alive
+	}
+	somethingFell := true
+	for somethingFell {
+		somethingFell = false
+		somethingGotGrounded := true
+		for somethingGotGrounded {
+			somethingGotGrounded = false
+			newlyGrounded := make([]int, 0, len(birds))
+			for i := range birds {
+				if !airborne[i] {
+					continue
+				}
+				isGrounded := false
+				for _, c := range birds[i].body {
+					if isGroundedLocal(c, grounded, birds, &apples) {
+						isGrounded = true
+						break
+					}
+				}
+				if isGrounded {
+					newlyGrounded = append(newlyGrounded, i)
+				}
+			}
+			if len(newlyGrounded) > 0 {
+				somethingGotGrounded = true
+				for _, idx := range newlyGrounded {
+					grounded[idx] = true
+					airborne[idx] = false
+				}
+			}
+		}
+
+		for i := range birds {
+			if !airborne[i] {
+				continue
+			}
+			somethingFell = true
+			for j := range birds[i].body {
+				birds[i].body[j].Y++
+			}
+			allOut := true
+			for _, part := range birds[i].body {
+				if part.Y < H+1 {
+					allOut = false
+					break
+				}
+			}
+			if allOut {
+				outcome.deaths[birds[i].owner]++
+				birds[i].alive = false
+				airborne[i] = false
+			}
+		}
+	}
+
+	for i := range birds {
+		if birds[i].alive {
+			birds[i].facing = bodyFacing(birds[i].body)
+		}
+	}
+
+	occupied := NewBG(W, H)
+	for i := range birds {
+		if !birds[i].alive {
+			continue
+		}
+		for _, p := range birds[i].body {
+			occupied.Set(p)
+		}
+	}
+	for i := 0; i < len(mine); i++ {
+		if !birds[i].alive || len(birds[i].body) == 0 {
+			continue
+		}
+		otherOcc := occExcept(&occupied, birds[i].body)
+		hasEscape := false
+		for _, dir := range state.VMoves(birds[i].body[0], birds[i].facing) {
+			_, _, alive, _, _ := simMove(birds[i].body, birds[i].facing, dir, &apples, &otherOcc)
+			if alive {
+				hasEscape = true
+				break
+			}
+		}
+		if !hasEscape {
+			outcome.trapped[0]++
+		}
+	}
+
+	return outcome
+}
+
+func outcomeRisk(outcome oneTurnOutcome) int {
+	return outcome.deaths[0]*100000 + outcome.trapped[0]*5000 + outcome.losses[0]*100 - outcome.deaths[1]*20 - outcome.losses[1]
+}
+
+func worstCasePlanRisk(mine []botEntry, enemies []enemyInfo, sources []Point, ourDirs []Direction) int {
+	if len(enemies) == 0 {
+		return outcomeRisk(simulateOneTurn(mine, nil, ourDirs, nil, sources))
+	}
+
+	enemyDirs := make([]Direction, len(enemies))
+	worst := -1
+	var walk func(idx int)
+	walk = func(idx int) {
+		if idx == len(enemies) {
+			risk := outcomeRisk(simulateOneTurn(mine, enemies, ourDirs, enemyDirs, sources))
+			if risk > worst {
+				worst = risk
+			}
+			return
+		}
+		for _, dir := range commandDirs(enemies[idx].facing) {
+			enemyDirs[idx] = dir
+			walk(idx + 1)
+		}
+	}
+	walk(0)
+	return worst
+}
+
+func refinePlansWithOneTurnSafety(mine []botEntry, enemies []enemyInfo, sources []Point, plans []botPlan, deadline time.Time) {
+	if len(mine) == 0 || len(enemies) == 0 || time.Until(deadline) < 8*time.Millisecond {
+		return
+	}
+
+	combos := 1
+	for _, enemy := range enemies {
+		combos *= len(commandDirs(enemy.facing))
+		if combos > 128 {
+			return
+		}
+	}
+
+	ourDirs := make([]Direction, len(plans))
+	for i := range plans {
+		ourDirs[i] = plans[i].dir
+	}
+
+	bestRisk := worstCasePlanRisk(mine, enemies, sources, ourDirs)
+	for i := range plans {
+		if time.Until(deadline) < 4*time.Millisecond {
+			break
+		}
+		currentDir := ourDirs[i]
+		for _, dir := range commandDirs(plans[i].facing) {
+			if dir == currentDir {
+				continue
+			}
+			candidate := append([]Direction(nil), ourDirs...)
+			candidate[i] = dir
+			risk := worstCasePlanRisk(mine, enemies, sources, candidate)
+			if risk < bestRisk {
+				bestRisk = risk
+				ourDirs = candidate
+				plans[i].dir = dir
+				plans[i].target = Add(plans[i].body[0], DirDelta[dir])
+				plans[i].reason = "safety"
+				plans[i].ok = true
+			}
+		}
+	}
+}
+
 func instantEat(body []Point, facing Direction, sources []Point, srcBG, occupied *BitGrid) SearchResult {
 	head := body[0]
 	var best SearchResult
@@ -940,8 +1301,11 @@ func instantEat(body []Point, facing Direction, sources []Point, srcBG, occupied
 		if !srcBG.Has(target) {
 			continue
 		}
-		_, _, alive, _, _ := simMove(body, facing, dir, srcBG, occupied)
+		nb, nf, alive, ate, eatenAt := simMove(body, facing, dir, srcBG, occupied)
 		if !alive {
+			continue
+		}
+		if ate && !hasFollowupEscape(nb, nf, srcBG, occupied, eatenAt) {
 			continue
 		}
 		score := srcScore(head, target)
@@ -950,6 +1314,25 @@ func instantEat(body []Point, facing Direction, sources []Point, srcBG, occupied
 		}
 	}
 	return best
+}
+
+func hasFollowupEscape(body []Point, facing Direction, sources, occupied *BitGrid, eatenAt Point) bool {
+	nextSources := sources
+	if sources != nil && sources.Has(eatenAt) {
+		cloned := NewBG(sources.Width, sources.Height)
+		copy(cloned.Bits, sources.Bits)
+		cloned.Clear(eatenAt)
+		nextSources = &cloned
+	}
+
+	head := body[0]
+	for _, dir := range state.VMoves(head, facing) {
+		_, _, alive, _, _ := simMove(body, facing, dir, nextSources, occupied)
+		if alive {
+			return true
+		}
+	}
+	return false
 }
 
 func pathBFS(body []Point, facing Direction, sources []Point,
@@ -995,6 +1378,9 @@ func pathBFS(body []Point, facing Direction, sources []Point,
 				first = dir
 			}
 			if ate && srcBG.Has(eatenAt) {
+				if !hasFollowupEscape(nb, nf, srcBG, occupied, eatenAt) {
+					continue
+				}
 				rawSteps := item.depth + 1
 				score := rawSteps * 1000
 				score += srcScore(body[0], eatenAt)
@@ -1194,6 +1580,83 @@ func bestAction(body []Point, facing Direction, sources []Point,
 	return SearchResult{dir: facing, ok: true}
 }
 
+func bestGroundAction(body []Point, facing Direction, target Point,
+	dirInfo map[Direction]*DirInfo, enemies []enemyInfo,
+	srcBG, occupied, danger *BitGrid) SearchResult {
+
+	bodyLen := len(body)
+	var best SearchResult
+
+	for _, dir := range legalDirs(facing) {
+		nb, _, alive, ate, eatenAt := simMove(body, facing, dir, srcBG, occupied)
+		if !alive {
+			continue
+		}
+
+		di := dirInfo[dir]
+		score := MDist(nb[0], target) * 12
+		if nb[0].X == target.X {
+			score -= 12
+		}
+		if nb[0].Y > target.Y {
+			score -= 6
+		}
+		if nb[0] == target {
+			score -= 120
+		}
+		if ate && srcBG.Has(eatenAt) {
+			score -= 60
+		}
+
+		below := Point{nb[0].X, nb[0].Y + 1}
+		if grid.WBelow(nb[0]) || (srcBG != nil && srcBG.Has(below)) {
+			score -= 10
+		}
+
+		if danger.Has(nb[0]) {
+			dangerPen := 40
+			if bodyLen <= 3 {
+				dangerPen = 600
+			} else if bodyLen <= 5 {
+				dangerPen = 150
+			}
+			for _, e := range enemies {
+				canReach := false
+				for _, edir := range legalDirs(e.facing) {
+					if Add(e.head, DirDelta[edir]) == nb[0] {
+						canReach = true
+						break
+					}
+				}
+				if canReach && e.bodyLen <= 3 && bodyLen > 3 {
+					dangerPen = -400
+				}
+			}
+			score += dangerPen
+		}
+
+		if di != nil && di.alive {
+			if di.flood < bodyLen {
+				score += 2500
+			} else if di.flood < bodyLen*2 {
+				score += 700
+			}
+		} else {
+			score += 2000
+		}
+
+		cand := SearchResult{dir: dir, target: target, score: score, ok: true}
+		if !best.ok || cand.score < best.score {
+			best = cand
+		}
+	}
+
+	if best.ok {
+		return best
+	}
+	return SearchResult{dir: facing, target: target, ok: true}
+}
+
 func calcEnemyDist(enemies []enemyInfo, allOcc *BitGrid) []int {
 	n := W * H
 	result := make([]int, n)
@@ -1226,6 +1689,183 @@ func filtSrc(sources []Point, myDists, enemyDists []int) []Point {
 		return sources
 	}
 	return out
+}
+
+func limitedSupportTargets(targets []Point) []Point {
+	if len(targets) <= 4 {
+		return targets
+	}
+	cp := append([]Point(nil), targets...)
+	sort.Slice(cp, func(i, j int) bool {
+		if cp[i].Y != cp[j].Y {
+			return cp[i].Y > cp[j].Y
+		}
+		return cp[i].X < cp[j].X
+	})
+	return cp[:4]
+}
+
+func planSupportJobs(mine []botEntry, preferred [][]Point, sources []Point, botDists [][]int, deadline time.Time) map[int]supportJob {
+	if len(mine) < 2 || len(sources) == 0 || time.Until(deadline) < 18*time.Millisecond {
+		return nil
+	}
+
+	srcBG := NewBG(W, H)
+	fillBG(&srcBG, sources)
+
+	hasReachable := make([]bool, len(mine))
+	for i, bot := range mine {
+		bodyLen := len(bot.body)
+		initRun := state.Terr.BodyInitRun(bot.body)
+		targets := limitedSupportTargets(preferred[i])
+		if len(targets) == 0 {
+			targets = limitedSupportTargets(sources)
+		}
+		for _, s := range targets {
+			res := state.Terr.SupPathBFS(bot.body[0], initRun, s, &srcBG)
+			if res != nil && res.MinLen <= bodyLen {
+				hasReachable[i] = true
+				break
+			}
+		}
+	}
+
+	type supportCand struct {
+		supporter int
+		climber   int
+		apple     Point
+		cell      Point
+		score     int
+	}
+	cands := make([]supportCand, 0, len(mine)*len(sources))
+
+	for supporter := range mine {
+		if hasReachable[supporter] {
+			continue
+		}
+		if time.Until(deadline) < 8*time.Millisecond {
+			break
+		}
+		supporterLen := len(mine[supporter].body)
+		for climber := range mine {
+			if climber == supporter || len(mine[climber].body) <= supporterLen {
+				continue
+			}
+			if time.Until(deadline) < 8*time.Millisecond {
+				break
+			}
+
+			climberLen := len(mine[climber].body)
+			targets := limitedSupportTargets(preferred[climber])
+			if len(targets) == 0 {
+				targets = limitedSupportTargets(sources)
+			}
+			bestScore := Unreachable
+			var bestApple Point
+			var bestCell Point
+
+			for _, apple := range targets {
+				if time.Until(deadline) < 8*time.Millisecond {
+					break
+				}
+				base := state.Terr.SupPathBFS(mine[climber].body[0], state.Terr.BodyInitRun(mine[climber].body), apple, &srcBG)
+				if base != nil && base.MinLen <= climberLen {
+					continue
+				}
+
+				maxY := apple.Y + 6
+				if maxY >= H {
+					maxY = H - 1
+				}
+				for dx := -1; dx <= 1; dx++ {
+					sx := apple.X + dx
+					if sx < 0 || sx >= W {
+						continue
+					}
+					for y := apple.Y + 1; y <= maxY; y++ {
+						cell := Point{sx, y}
+						if grid.IsWall(cell) {
+							break
+						}
+						ci := cell.Y*W + cell.X
+						if botDists[supporter][ci] == Unreachable {
+							continue
+						}
+						minLen, climbDist := state.Terr.MinImmLen(cell, apple, &srcBG)
+						if minLen == Unreachable || minLen > climberLen {
+							continue
+						}
+
+						score := botDists[supporter][ci] * 20
+						score += climbDist * 8
+						score += MDist(mine[climber].body[0], cell) * 6
+						score -= apple.Y * 25
+						if dx != 0 {
+							if dx < 0 {
+								score += -dx * 10
+							} else {
+								score += dx * 10
+							}
+						}
+						if grid.WBelow(cell) {
+							score -= 15
+						}
+						if score < bestScore {
+							bestScore = score
+							bestApple = apple
+							bestCell = cell
+						}
+					}
+				}
+			}
+
+			if bestScore != Unreachable {
+				cands = append(cands, supportCand{
+					supporter: supporter,
+					climber:   climber,
+					apple:     bestApple,
+					cell:      bestCell,
+					score:     bestScore,
+				})
+			}
+		}
+	}
+
+	if len(cands) == 0 {
+		return nil
+	}
+
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].score != cands[j].score {
+			return cands[i].score < cands[j].score
+		}
+		if cands[i].apple.Y != cands[j].apple.Y {
+			return cands[i].apple.Y > cands[j].apple.Y
+		}
+		return mine[cands[i].supporter].id < mine[cands[j].supporter].id
+	})
+
+	usedSupporter := make([]bool, len(mine))
+	usedClimber := make([]bool, len(mine))
+	jobs := make(map[int]supportJob, len(mine))
+	for _, cand := range cands {
+		if usedSupporter[cand.supporter] || usedClimber[cand.climber] {
+			continue
+		}
+		usedSupporter[cand.supporter] = true
+		usedClimber[cand.climber] = true
+		jobs[mine[cand.supporter].id] = supportJob{
+			climberID: mine[cand.climber].id,
+			apple:     cand.apple,
+			cell:      cand.cell,
+			score:     cand.score,
+		}
+	}
+
+	if len(jobs) == 0 {
+		return nil
+	}
+	return jobs
 }
 
 func main() {
@@ -1272,10 +1912,6 @@ func main() {
 		var botN int
 		fmt.Sscan(readline(), &botN)
 
-		type botEntry struct {
-			id   int
-			body []Point
-		}
 		allOcc := NewBG(W, H)
 		var mine []botEntry
 		var enemies []enemyInfo
@@ -1331,40 +1967,35 @@ func main() {
 		})
 
 		vsrc := make([][]Point, len(mine))
-		{
-			botDists := make([][]int, len(mine))
-			for i, bot := range mine {
-				occ := occExcept(&allOcc, bot.body)
-				_, botDists[i] = floodDist(bot.body[0], &occ)
+		botDists := make([][]int, len(mine))
+		for i, bot := range mine {
+			occ := occExcept(&allOcc, bot.body)
+			_, botDists[i] = floodDist(bot.body[0], &occ)
+		}
+		for _, s := range sources {
+			si := s.Y*W + s.X
+			bestBot := -1
+			bestDist := Unreachable
+			for i := range mine {
+				d := botDists[i][si]
+				if d < bestDist {
+					bestDist = d
+					bestBot = i
+				}
 			}
-			for _, s := range sources {
-				si := s.Y*W + s.X
-				bestBot := -1
-				bestDist := Unreachable
-				for i := range mine {
-					d := botDists[i][si]
-					if d < bestDist {
-						bestDist = d
-						bestBot = i
-					}
-				}
-				if bestBot >= 0 {
-					vsrc[bestBot] = append(vsrc[bestBot], s)
-				}
+			if bestBot >= 0 {
+				vsrc[bestBot] = append(vsrc[bestBot], s)
 			}
 		}
+		supportJobs := planSupportJobs(mine, vsrc, sources, botDists, turnDeadline)
 
-		var actions []string
-		var marks []Point
+		plans := make([]botPlan, 0, len(mine))
 		plannedHeads := NewBG(W, H)
 
 		for botIdx, bot := range mine {
 			body := bot.body
 			head := body[0]
-			facing := DirUp
-			if len(body) >= 2 {
-				facing = FacingPts(body[0], body[1])
-			}
+			facing := bodyFacing(body)
 			bodyLen := len(body)
 
 			otherOcc := occExcept(&allOcc, body)
@@ -1381,11 +2012,13 @@ func main() {
 			allCompetitive := filtSrc(sources, myDists, enemyDists)
 			plan := instantEat(body, facing, allCompetitive, &srcBG, &otherOcc)
 			isInstantEat := false
+			planReason := ""
 
 			if plan.ok {
 				di := dirInfo[plan.dir]
 				if di != nil && di.alive {
 					isInstantEat = true
+					planReason = "eat"
 				} else {
 					altPlan := instantEat(body, facing, sources, &srcBG, &otherOcc)
 					if altPlan.ok {
@@ -1393,6 +2026,7 @@ func main() {
 						if altDi != nil && altDi.alive {
 							plan = altPlan
 							isInstantEat = true
+							planReason = "eat"
 						} else {
 							plan.ok = false
 						}
@@ -1426,10 +2060,24 @@ func main() {
 				}
 
 				plan = pathBFS(body, facing, competitive, maxDepth, dirInfo, enemyDists, &srcBG, &otherOcc, turnDeadline)
+				if plan.ok {
+					planReason = "bfs"
+				}
 
 				if plan.ok && !isSafeDir(plan.dir, dirInfo, bodyLen) {
 					if bs, ok := bestSafeDir(dirInfo); ok && isSafeDir(bs, dirInfo, bodyLen) {
 						plan.dir = bs
+						planReason = "safe"
+					}
+				}
+			}
+
+			if !plan.ok {
+				if job, ok := supportJobs[bot.id]; ok {
+					fillBG(&srcBG, sources)
+					plan = bestGroundAction(body, facing, job.cell, dirInfo, enemies, &srcBG, &otherOcc, &eDanger)
+					if plan.ok {
+						planReason = "support"
 					}
 				}
 			}
@@ -1437,10 +2085,14 @@ func main() {
 			if !plan.ok {
 				fillBG(&srcBG, available)
 				plan = bestAction(body, facing, available, dirInfo, enemies, enemyDists, &srcBG, &otherOcc, &eDanger)
+				if plan.ok {
+					planReason = "bmove"
+				}
 			}
 
 			if !plan.ok {
 				plan.dir = facing
+				planReason = "face"
 			}
 
 			nextHead := Add(head, DirDelta[plan.dir])
@@ -1462,6 +2114,7 @@ func main() {
 				}
 				if bestDir != DirNone {
 					plan.dir = bestDir
+					planReason = "escape"
 				}
 			}
 
@@ -1470,16 +2123,29 @@ func main() {
 					if di.flood < bodyLen+2 {
 						if bs, ok := bestSafeDir(dirInfo); ok && dirInfo[bs].flood >= bodyLen*3 {
 							plan.dir = bs
+							planReason = "safe"
 						}
 					}
 				}
 			}
 
 			if plan.ok {
-				marks = append(marks, plan.target)
+				plans = append(plans, botPlan{id: bot.id, body: append([]Point(nil), body...), facing: facing, dir: plan.dir, target: plan.target, reason: planReason, ok: true})
+			} else {
+				plans = append(plans, botPlan{id: bot.id, body: append([]Point(nil), body...), facing: facing, dir: plan.dir, target: Add(head, DirDelta[plan.dir]), reason: planReason})
 			}
 			plannedHeads.Set(Add(head, DirDelta[plan.dir]))
-			actions = append(actions, fmt.Sprintf("%d %s", bot.id, DirName[plan.dir]))
+		}
+
+		refinePlansWithOneTurnSafety(mine, enemies, sources, plans, turnDeadline)
+
+		var actions []string
+		var marks []Point
+		for _, plan := range plans {
+			if plan.ok {
+				marks = append(marks, plan.target)
+			}
+			actions = append(actions, actionString(plan.id, plan.dir, plan.reason))
 		}
 
 		for i, m := range marks {

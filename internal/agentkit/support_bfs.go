@@ -98,6 +98,95 @@ func (t *STerrain) SupPathBFS(start Point, initRun int, target Point, apples *Bi
 	return nil
 }
 
+// SupReachMulti does a single support-aware BFS from start and returns all
+// targets reachable with MinLen <= maxBodyLen. Replaces N separate SupPathBFS
+// calls. No path reconstruction, no prev tracking — much lighter per-cell work.
+// Uses pre-allocated ImmBuf — not safe for concurrent calls on same STerrain.
+func (t *STerrain) SupReachMulti(start Point, initRun, maxBodyLen int, targets []Point, apples *BitGrid) []Point {
+	g := t.Grid
+	if g.IsWall(start) || len(targets) == 0 {
+		return nil
+	}
+	if initRun < 1 {
+		initRun = 1
+	}
+
+	buf := &t.ImmBuf
+	capLen := maxBodyLen
+	if capLen > buf.MaxLen {
+		capLen = buf.MaxLen
+	}
+	if initRun > capLen {
+		return nil
+	}
+
+	// Mark target positions (skip walls).
+	tgtBG := NewBG(g.Width, g.Height)
+	remaining := 0
+	for _, tgt := range targets {
+		if !g.IsWall(tgt) {
+			tgtBG.Set(tgt)
+			remaining++
+		}
+	}
+	if remaining == 0 {
+		return nil
+	}
+
+	stride := buf.MaxLen + 1
+	buf.Reset()
+
+	sKey := g.CIdx(start)*stride + initRun
+	buf.Mark(sKey)
+	buf.Buckets[initRun] = append(buf.Buckets[initRun], ImmSt{start, initRun, 0})
+
+	var result []Point
+
+	for L := initRun; L <= capLen; L++ {
+		for i := 0; i < len(buf.Buckets[L]); i++ {
+			cur := buf.Buckets[L][i]
+
+			for dir := DirUp; dir <= DirLeft; dir++ {
+				next := Add(cur.Pos, DirDelta[dir])
+
+				// Target adjacency check: is neighbor an unfound target?
+				if tgtBG.Has(next) {
+					tgtBG.Clear(next)
+					result = append(result, next)
+					remaining--
+					if remaining == 0 {
+						return result
+					}
+				}
+
+				// BFS expansion.
+				if g.IsWall(next) {
+					continue
+				}
+				nr := cur.Run + 1
+				if g.WBelow(next) || (apples != nil && apples.Has(Point{X: next.X, Y: next.Y + 1})) {
+					nr = 1
+				}
+				if nr > capLen {
+					continue
+				}
+				nKey := g.CIdx(next)*stride + nr
+				if buf.Seen(nKey) {
+					continue
+				}
+				buf.Mark(nKey)
+				cost := L
+				if nr > L {
+					cost = nr
+				}
+				buf.Buckets[cost] = append(buf.Buckets[cost], ImmSt{next, nr, cur.Dist + 1})
+			}
+		}
+	}
+
+	return result
+}
+
 func (t *STerrain) sbReconstruct(goalKey, w, stride int, approach Point, minLen, dist int) *SBResult {
 	buf := &t.SBBuf
 
