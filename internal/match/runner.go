@@ -47,6 +47,8 @@ type MatchResult struct {
 	Turns          int
 	Scores         [2]int
 	Losses         [2]int
+	SegmentsLost   [2]int
+	BotsLost       [2]int
 	Winner         int
 	LossReasons    [2]LossReason
 	BirdsPerPlayer int
@@ -85,6 +87,10 @@ func (r MatchResult) Metrics() []Metric {
 		{Label: "loss_bad_command_p1", Value: lossMetric(r.LossReasons[1], LossReasonBadCommand)},
 		{Label: "score_p0", Value: float64(r.Scores[0])},
 		{Label: "score_p1", Value: float64(r.Scores[1])},
+		{Label: "segments_lost_p0", Value: float64(r.SegmentsLost[0])},
+		{Label: "segments_lost_p1", Value: float64(r.SegmentsLost[1])},
+		{Label: "bots_lost_p0", Value: float64(r.BotsLost[0])},
+		{Label: "bots_lost_p1", Value: float64(r.BotsLost[1])},
 		{Label: "losses_p0", Value: float64(r.Losses[0])},
 		{Label: "losses_p1", Value: float64(r.Losses[1])},
 	}
@@ -92,10 +98,12 @@ func (r MatchResult) Metrics() []Metric {
 
 func (r MatchResult) RenderMatch() string {
 	return fmt.Sprintf(
-		`{"id":%d,"seed":%d,"turns":%d,"winner":%d,"loss_reason_p0":%q,"loss_reason_p1":%q,"score_p0":%d,"score_p1":%d,"losses_p0":%d,"losses_p1":%d,"birds_per_player":%d,"map_width":%d,"map_height":%d,"apples":%d}`,
+		`{"id":%d,"seed":%d,"turns":%d,"winner":%d,"loss_reason_p0":%q,"loss_reason_p1":%q,"score_p0":%d,"score_p1":%d,"segments_lost_p0":%d,"segments_lost_p1":%d,"bots_lost_p0":%d,"bots_lost_p1":%d,"losses_p0":%d,"losses_p1":%d,"birds_per_player":%d,"map_width":%d,"map_height":%d,"apples":%d}`,
 		r.ID, r.Seed, r.Turns, r.Winner,
 		r.LossReasons[0], r.LossReasons[1],
 		r.Scores[0], r.Scores[1],
+		r.SegmentsLost[0], r.SegmentsLost[1],
+		r.BotsLost[0], r.BotsLost[1],
 		r.Losses[0], r.Losses[1],
 		r.BirdsPerPlayer, r.MapWidth, r.MapHeight, r.Apples,
 	)
@@ -244,12 +252,19 @@ func buildMatchResult(simulationID int, seed int64, turns int, game *engine.Game
 		birdsPerPlayer = len(players[0].GetBirds())
 	}
 
+	botsLost := [2]int{}
+	for i, player := range players {
+		botsLost[i] = len(player.GetBirds()) - liveBirdCount(player)
+	}
+
 	return MatchResult{
 		ID:             simulationID,
 		Seed:           seed,
 		Turns:          turns,
 		Scores:         [2]int{players[0].GetScore(), players[1].GetScore()},
 		Losses:         game.Losses,
+		SegmentsLost:   game.Losses,
+		BotsLost:       botsLost,
 		Winner:         winner,
 		LossReasons:    [2]LossReason{lossReasonFor(players[0], winner, 0), lossReasonFor(players[1], winner, 1)},
 		BirdsPerPlayer: birdsPerPlayer,
@@ -264,6 +279,16 @@ func lossMetric(actual, expected LossReason) float64 {
 		return 1.0
 	}
 	return 0.0
+}
+
+func liveBirdCount(player *engine.Player) int {
+	count := 0
+	for _, bird := range player.GetBirds() {
+		if bird.Alive {
+			count++
+		}
+	}
+	return count
 }
 
 func lossReasonFor(player *engine.Player, winner, playerIndex int) LossReason {
