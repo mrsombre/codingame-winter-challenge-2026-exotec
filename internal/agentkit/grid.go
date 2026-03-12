@@ -1,25 +1,17 @@
 package agentkit
 
-const UnreachableDistance = 9999
+const Unreachable = 9999
 
-// Point is an integer grid coordinate.
 type Point struct {
 	X int
 	Y int
-}
-
-var CardinalDirs = []Point{
-	{X: 0, Y: -1},
-	{X: 1, Y: 0},
-	{X: 0, Y: 1},
-	{X: -1, Y: 0},
 }
 
 func Add(a, b Point) Point {
 	return Point{X: a.X + b.X, Y: a.Y + b.Y}
 }
 
-func ManhattanDistance(a, b Point) int {
+func MDist(a, b Point) int {
 	return abs(a.X-b.X) + abs(a.Y-b.Y)
 }
 
@@ -32,25 +24,24 @@ func abs(v int) int {
 
 // --- BitGrid ----------------------------------------------------------------
 
-// BitGrid is a compact occupancy grid backed by a uint64 bitset.
 type BitGrid struct {
 	Width  int
 	Height int
-	bits   []uint64
+	Bits   []uint64
 }
 
-func NewBitGrid(width, height int) BitGrid {
+func NewBG(width, height int) BitGrid {
 	cells := width * height
 	return BitGrid{
 		Width:  width,
 		Height: height,
-		bits:   make([]uint64, (cells+63)/64),
+		Bits:   make([]uint64, (cells+63)/64),
 	}
 }
 
 func (g *BitGrid) Reset() {
-	for i := range g.bits {
-		g.bits[i] = 0
+	for i := range g.Bits {
+		g.Bits[i] = 0
 	}
 }
 
@@ -59,7 +50,7 @@ func (g *BitGrid) Has(p Point) bool {
 		return false
 	}
 	idx := p.Y*g.Width + p.X
-	return g.bits[idx/64]&(uint64(1)<<uint(idx%64)) != 0
+	return g.Bits[idx/64]&(uint64(1)<<uint(idx%64)) != 0
 }
 
 func (g *BitGrid) Set(p Point) {
@@ -67,7 +58,7 @@ func (g *BitGrid) Set(p Point) {
 		return
 	}
 	idx := p.Y*g.Width + p.X
-	g.bits[idx/64] |= uint64(1) << uint(idx%64)
+	g.Bits[idx/64] |= uint64(1) << uint(idx%64)
 }
 
 func (g *BitGrid) Clear(p Point) {
@@ -75,117 +66,109 @@ func (g *BitGrid) Clear(p Point) {
 		return
 	}
 	idx := p.Y*g.Width + p.X
-	g.bits[idx/64] &^= uint64(1) << uint(idx%64)
+	g.Bits[idx/64] &^= uint64(1) << uint(idx%64)
 }
 
-// --- ArenaGrid --------------------------------------------------------------
+// --- AGrid ------------------------------------------------------------------
 
-// ArenaGrid is an immutable map structure built once from init input.
-// Stores walls, wall-below flags, and precomputed cell directions.
-type ArenaGrid struct {
-	Width     int
-	Height    int
-	walls     BitGrid
-	wallBelow BitGrid
-	cellDirs  [][]Direction
+type AGrid struct {
+	Width    int
+	Height   int
+	Walls    BitGrid
+	WallBl   BitGrid
+	CellDirs [][]Direction
 }
 
-func NewArenaGrid(width, height int, walls map[Point]bool) *ArenaGrid {
-	grid := &ArenaGrid{
-		Width:     width,
-		Height:    height,
-		walls:     NewBitGrid(width, height),
-		wallBelow: NewBitGrid(width, height),
-		cellDirs:  make([][]Direction, width*height),
+func NewAG(width, height int, walls map[Point]bool) *AGrid {
+	g := &AGrid{
+		Width:    width,
+		Height:   height,
+		Walls:    NewBG(width, height),
+		WallBl:   NewBG(width, height),
+		CellDirs: make([][]Direction, width*height),
 	}
 
 	for p := range walls {
-		if grid.InBounds(p) {
-			grid.walls.Set(p)
+		if g.InB(p) {
+			g.Walls.Set(p)
 		}
 	}
 
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			p := Point{X: x, Y: y}
-
-			if y == height-1 || grid.IsWall(Point{X: x, Y: y + 1}) {
-				grid.wallBelow.Set(p)
+			if y == height-1 || g.IsWall(Point{X: x, Y: y + 1}) {
+				g.WallBl.Set(p)
 			}
-			if grid.IsWall(p) {
+			if g.IsWall(p) {
 				continue
 			}
-
 			var dirs []Direction
 			for dir := DirUp; dir <= DirLeft; dir++ {
-				next := Add(p, DirectionDeltas[dir])
-				if !grid.IsWall(next) {
+				next := Add(p, DirDelta[dir])
+				if !g.IsWall(next) {
 					dirs = append(dirs, dir)
 				}
 			}
-			grid.cellDirs[y*width+x] = dirs
+			g.CellDirs[y*width+x] = dirs
 		}
 	}
 
-	return grid
+	return g
 }
 
-func (g *ArenaGrid) InBounds(p Point) bool {
+func (g *AGrid) InB(p Point) bool {
 	return p.X >= 0 && p.X < g.Width && p.Y >= 0 && p.Y < g.Height
 }
 
-func (g *ArenaGrid) IsWall(p Point) bool {
-	if !g.InBounds(p) {
+func (g *AGrid) IsWall(p Point) bool {
+	if !g.InB(p) {
 		return true
 	}
-	return g.walls.Has(p)
+	return g.Walls.Has(p)
 }
 
-func (g *ArenaGrid) WallBelow(p Point) bool {
-	return g.wallBelow.Has(p)
+func (g *AGrid) WBelow(p Point) bool {
+	return g.WallBl.Has(p)
 }
 
-// CellDirs returns all non-wall neighbor directions for a cell.
-func (g *ArenaGrid) CellDirs(pos Point) []Direction {
-	if !g.InBounds(pos) || g.IsWall(pos) {
+func (g *AGrid) CDirs(pos Point) []Direction {
+	if !g.InB(pos) || g.IsWall(pos) {
 		return nil
 	}
-	return g.cellDirs[pos.Y*g.Width+pos.X]
+	return g.CellDirs[pos.Y*g.Width+pos.X]
 }
 
-// CellIdx returns the flat index for a point in the grid.
-func (g *ArenaGrid) CellIdx(p Point) int {
+func (g *AGrid) CIdx(p Point) int {
 	return p.Y*g.Width + p.X
 }
 
-// --- DistanceField ----------------------------------------------------------
+// --- DField -----------------------------------------------------------------
 
-// DistanceField stores shortest-path distances over an arena grid.
-type DistanceField struct {
+type DField struct {
 	Width  int
 	Height int
-	Values []int
+	Vals   []int
 }
 
-func (d DistanceField) At(p Point) int {
+func (d DField) At(p Point) int {
 	if p.X < 0 || p.X >= d.Width || p.Y < 0 || p.Y >= d.Height {
-		return UnreachableDistance
+		return Unreachable
 	}
-	return d.Values[p.Y*d.Width+p.X]
+	return d.Vals[p.Y*d.Width+p.X]
 }
 
-// --- ArenaGrid BFS helpers --------------------------------------------------
+// --- AGrid BFS helpers ------------------------------------------------------
 
-// AppleDistanceField computes BFS distance from every cell to the nearest apple.
-func (g *ArenaGrid) AppleDistanceField(apples *BitGrid) DistanceField {
+func (g *AGrid) AppleDist(apples *BitGrid) DField {
 	n := g.Width * g.Height
-	field := DistanceField{
+	field := DField{
 		Width:  g.Width,
 		Height: g.Height,
-		Values: make([]int, n),
+		Vals:   make([]int, n),
 	}
-	for i := range field.Values {
-		field.Values[i] = UnreachableDistance
+	for i := range field.Vals {
+		field.Vals[i] = Unreachable
 	}
 	if apples == nil {
 		return field
@@ -198,25 +181,25 @@ func (g *ArenaGrid) AppleDistanceField(apples *BitGrid) DistanceField {
 			if g.IsWall(p) || !apples.Has(p) {
 				continue
 			}
-			field.Values[y*g.Width+x] = 0
+			field.Vals[y*g.Width+x] = 0
 			queue = append(queue, p)
 		}
 	}
 
 	for i := 0; i < len(queue); i++ {
 		p := queue[i]
-		baseDist := field.Values[p.Y*g.Width+p.X]
+		bd := field.Vals[p.Y*g.Width+p.X]
 		for dir := DirUp; dir <= DirLeft; dir++ {
-			next := Add(p, DirectionDeltas[dir])
+			next := Add(p, DirDelta[dir])
 			if g.IsWall(next) {
 				continue
 			}
-			nextIdx := next.Y*g.Width + next.X
-			nextDist := baseDist + 1
-			if nextDist >= field.Values[nextIdx] {
+			ni := next.Y*g.Width + next.X
+			nd := bd + 1
+			if nd >= field.Vals[ni] {
 				continue
 			}
-			field.Values[nextIdx] = nextDist
+			field.Vals[ni] = nd
 			queue = append(queue, next)
 		}
 	}
@@ -224,25 +207,23 @@ func (g *ArenaGrid) AppleDistanceField(apples *BitGrid) DistanceField {
 	return field
 }
 
-// FloodCount does a bounded BFS from start through open, unoccupied cells.
-func (g *ArenaGrid) FloodCount(start Point, occupied *BitGrid, maxCount int) int {
-	if maxCount <= 0 || !g.InBounds(start) || g.IsWall(start) {
+func (g *AGrid) Flood(start Point, occupied *BitGrid, maxN int) int {
+	if maxN <= 0 || !g.InB(start) || g.IsWall(start) {
 		return 0
 	}
 
-	visited := NewBitGrid(g.Width, g.Height)
+	visited := NewBG(g.Width, g.Height)
 	visited.Set(start)
-	queue := make([]Point, 1, maxCount)
+	queue := make([]Point, 1, maxN)
 	queue[0] = start
 	count := 0
 
-	for i := 0; i < len(queue) && count < maxCount; i++ {
+	for i := 0; i < len(queue) && count < maxN; i++ {
 		p := queue[i]
 		count++
-
 		for dir := DirUp; dir <= DirLeft; dir++ {
-			next := Add(p, DirectionDeltas[dir])
-			if !g.InBounds(next) || g.IsWall(next) || visited.Has(next) {
+			next := Add(p, DirDelta[dir])
+			if !g.InB(next) || g.IsWall(next) || visited.Has(next) {
 				continue
 			}
 			if occupied != nil && occupied.Has(next) {

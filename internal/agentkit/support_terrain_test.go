@@ -2,8 +2,8 @@ package agentkit
 
 import "testing"
 
-func TestSupportTerrainSeed18UpperAppleNeedsLengthFour(t *testing.T) {
-	terrain := supportTerrainFromLayout([]string{
+func TestSTerrainSeed18UpperAppleNeedsLengthFour(t *testing.T) {
+	terrain := sTerrainFromLayout([]string{
 		"..................",
 		"...##........##...",
 		"...#....##....#...",
@@ -19,30 +19,30 @@ func TestSupportTerrainSeed18UpperAppleNeedsLengthFour(t *testing.T) {
 	body := []Point{{X: 2, Y: 1}, {X: 2, Y: 2}, {X: 2, Y: 3}}
 	target := Point{X: 7, Y: 0}
 
-	if got := terrain.MinSoloLengthFromBodyToTarget(body, target); got != 4 {
-		t.Fatalf("MinSoloLengthFromBodyToTarget() = %d, want 4", got)
+	if got := terrain.MinBodyLen(body, target); got != 4 {
+		t.Fatalf("MinBodyLen() = %d, want 4", got)
 	}
 }
 
-func TestSupportTerrainApproachNodesPreferLowestSupport(t *testing.T) {
-	terrain := supportTerrainFromLayout([]string{
+func TestSTerrainApprNodesPreferLowestSupport(t *testing.T) {
+	terrain := sTerrainFromLayout([]string{
 		".....",
 		"..#..",
 		".....",
 		"#####",
 	})
 
-	got := terrain.ApproachNodeIDs(Point{X: 2, Y: 0})
+	got := terrain.ApprNodes(Point{X: 2, Y: 0})
 	if len(got) != 1 {
-		t.Fatalf("len(ApproachNodeIDs) = %d, want 1", len(got))
+		t.Fatalf("len(ApprNodes) = %d, want 1", len(got))
 	}
 	if terrain.Nodes[got[0]].Pos != (Point{X: 2, Y: 0}) {
 		t.Fatalf("approach node = %+v, want {2 0}", terrain.Nodes[got[0]].Pos)
 	}
 }
 
-func TestSupportTerrainSeed1001CenterBotNeedsLengthFive(t *testing.T) {
-	terrain := supportTerrainFromLayout([]string{
+func TestSTerrainSeed1001CenterBotNeedsLengthFive(t *testing.T) {
+	terrain := sTerrainFromLayout([]string{
 		".#............................#.",
 		".#............................#.",
 		"..#..........................#..",
@@ -65,12 +65,12 @@ func TestSupportTerrainSeed1001CenterBotNeedsLengthFive(t *testing.T) {
 	body := []Point{{X: 14, Y: 13}, {X: 14, Y: 14}, {X: 14, Y: 15}}
 	target := Point{X: 11, Y: 6}
 
-	if got := terrain.MinSoloLengthFromBodyToTarget(body, target); got != 5 {
-		t.Fatalf("MinSoloLengthFromBodyToTarget() = %d, want 5", got)
+	if got := terrain.MinBodyLen(body, target); got != 5 {
+		t.Fatalf("MinBodyLen() = %d, want 5", got)
 	}
 }
 
-func TestSupportTerrainSeed1001TopAppleApproaches(t *testing.T) {
+func TestSTerrainSeed1001TopAppleApproaches(t *testing.T) {
 	layout := []string{
 		".#............................#.",
 		".#............................#.",
@@ -99,20 +99,19 @@ func TestSupportTerrainSeed1001TopAppleApproaches(t *testing.T) {
 	}
 
 	state := stateFromLayout(layout, apples)
-	approaches := TargetApproaches(&state, Point{X: 4, Y: 1})
+	approaches := TgtAppr(&state, Point{X: 4, Y: 1})
 	if len(approaches) == 0 {
-		t.Fatal("TargetApproaches() returned no approaches")
+		t.Fatal("TgtAppr() returned no approaches")
 	}
 
-	assertApproach := func(support Point, minLen int) {
+	assertApproach := func(support Point, minL int) {
 		t.Helper()
-		for _, approach := range approaches {
-			if approach.SupportCell == support &&
-				approach.MinLen == minLen {
+		for _, a := range approaches {
+			if a.Cell == support && a.MinL == minL {
 				return
 			}
 		}
-		t.Fatalf("missing approach support=%+v minLen=%d in %+v", support, minLen, approaches)
+		t.Fatalf("missing approach cell=%+v minL=%d in %+v", support, minL, approaches)
 	}
 
 	assertApproach(Point{X: 2, Y: 2}, 2)
@@ -120,7 +119,7 @@ func TestSupportTerrainSeed1001TopAppleApproaches(t *testing.T) {
 	assertApproach(Point{X: 8, Y: 1}, 4)
 }
 
-func TestSupportTerrainSeed1001ClosestSupportsFor116(t *testing.T) {
+func TestSTerrainSeed1001CloseSupFor116(t *testing.T) {
 	layout := []string{
 		".#............................#.",
 		".#............................#.",
@@ -149,22 +148,22 @@ func TestSupportTerrainSeed1001ClosestSupportsFor116(t *testing.T) {
 	}
 
 	state := stateFromLayout(layout, apples)
-	got := ClosestSupports(&state, Point{X: 11, Y: 6})
+	got := CloseSup(&state, Point{X: 11, Y: 6})
 
-	assertHas := func(support Point, minLen int) {
+	assertHas := func(support Point, minL int) {
 		t.Helper()
-		for _, approach := range got {
-			if approach.SupportCell == support && approach.MinLen == minLen {
+		for _, a := range got {
+			if a.Cell == support && a.MinL == minL {
 				return
 			}
 		}
-		t.Fatalf("missing closest support=%+v minLen=%d in %+v", support, minLen, got)
+		t.Fatalf("missing closest cell=%+v minL=%d in %+v", support, minL, got)
 	}
 	assertMissing := func(support Point) {
 		t.Helper()
-		for _, approach := range got {
-			if approach.SupportCell == support {
-				t.Fatalf("unexpected duplicate support=%+v in %+v", support, got)
+		for _, a := range got {
+			if a.Cell == support {
+				t.Fatalf("unexpected duplicate cell=%+v in %+v", support, got)
 			}
 		}
 	}
@@ -176,7 +175,7 @@ func TestSupportTerrainSeed1001ClosestSupportsFor116(t *testing.T) {
 	assertMissing(Point{X: 15, Y: 8})
 }
 
-func TestStateRebuildAppleSupportsMirrorsSeed1001(t *testing.T) {
+func TestStateRebuildSupMirrorsSeed1001(t *testing.T) {
 	layout := []string{
 		".#............................#.",
 		".#............................#.",
@@ -205,29 +204,29 @@ func TestStateRebuildAppleSupportsMirrorsSeed1001(t *testing.T) {
 	}
 
 	state := stateFromLayout(layout, apples)
-	state.RebuildAppleSupports()
+	state.RebuildSup()
 
-	left := state.AppleSupports[Point{X: 4, Y: 1}]
-	right := state.AppleSupports[Point{X: 27, Y: 1}]
+	left := state.AppleSup[Point{X: 4, Y: 1}]
+	right := state.AppleSup[Point{X: 27, Y: 1}]
 	if len(left) == 0 || len(right) == 0 {
 		t.Fatalf("expected mirrored apple supports, got left=%+v right=%+v", left, right)
 	}
 
-	assertHas := func(approaches []TargetApproach, support Point, minLen int) {
+	assertHas := func(approaches []TAppr, support Point, minL int) {
 		t.Helper()
-		for _, approach := range approaches {
-			if approach.SupportCell == support && approach.MinLen == minLen {
+		for _, a := range approaches {
+			if a.Cell == support && a.MinL == minL {
 				return
 			}
 		}
-		t.Fatalf("missing support=%+v minLen=%d in %+v", support, minLen, approaches)
+		t.Fatalf("missing cell=%+v minL=%d in %+v", support, minL, approaches)
 	}
 
 	assertHas(left, Point{X: 2, Y: 2}, 2)
 	assertHas(right, Point{X: 29, Y: 2}, 2)
 }
 
-func TestStateRebuildAppleSupportsFor206UsesLocalSupports(t *testing.T) {
+func TestStateRebuildSupFor206UsesLocalSupports(t *testing.T) {
 	layout := []string{
 		".#............................#.",
 		".#............................#.",
@@ -256,23 +255,23 @@ func TestStateRebuildAppleSupportsFor206UsesLocalSupports(t *testing.T) {
 	}
 
 	state := stateFromLayout(layout, apples)
-	state.RebuildAppleSupports()
-	got := state.AppleSupports[Point{X: 20, Y: 6}]
+	state.RebuildSup()
+	got := state.AppleSup[Point{X: 20, Y: 6}]
 
-	assertHas := func(support Point, minLen int) {
+	assertHas := func(support Point, minL int) {
 		t.Helper()
-		for _, approach := range got {
-			if approach.SupportCell == support && approach.MinLen == minLen {
+		for _, a := range got {
+			if a.Cell == support && a.MinL == minL {
 				return
 			}
 		}
-		t.Fatalf("missing support=%+v minLen=%d in %+v", support, minLen, got)
+		t.Fatalf("missing cell=%+v minL=%d in %+v", support, minL, got)
 	}
 	assertMissing := func(support Point) {
 		t.Helper()
-		for _, approach := range got {
-			if approach.SupportCell == support {
-				t.Fatalf("unexpected support=%+v in %+v", support, got)
+		for _, a := range got {
+			if a.Cell == support {
+				t.Fatalf("unexpected cell=%+v in %+v", support, got)
 			}
 		}
 	}
@@ -283,7 +282,7 @@ func TestStateRebuildAppleSupportsFor206UsesLocalSupports(t *testing.T) {
 	assertMissing(Point{X: 20, Y: 6})
 }
 
-func supportTerrainFromLayout(layout []string) *SupportTerrain {
+func sTerrainFromLayout(layout []string) *STerrain {
 	walls := make(map[Point]bool)
 	for y, row := range layout {
 		for x, ch := range row {
@@ -292,12 +291,12 @@ func supportTerrainFromLayout(layout []string) *SupportTerrain {
 			}
 		}
 	}
-	grid := NewArenaGrid(len(layout[0]), len(layout), walls)
-	return NewSupportTerrain(grid)
+	grid := NewAG(len(layout[0]), len(layout), walls)
+	return NewSTerrain(grid)
 }
 
 func bitGridFromPoints(width, height int, points []Point) BitGrid {
-	grid := NewBitGrid(width, height)
+	grid := NewBG(width, height)
 	for _, p := range points {
 		grid.Set(p)
 	}
@@ -313,7 +312,7 @@ func stateFromLayout(layout []string, apples []Point) State {
 			}
 		}
 	}
-	grid := NewArenaGrid(len(layout[0]), len(layout), walls)
+	grid := NewAG(len(layout[0]), len(layout), walls)
 	state := NewState(grid)
 	for _, p := range apples {
 		state.Apples.Set(p)

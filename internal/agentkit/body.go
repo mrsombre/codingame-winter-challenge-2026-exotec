@@ -1,24 +1,16 @@
 package agentkit
 
-// MaxBody matches the practical fixed-capacity style used by the arena-focused agent.
 const MaxBody = 80
 
-// Body is an arena-friendly snake body representation.
-//
-// Current codebase patterns:
-// - engine and agent/basic keep bodies as slices
-// - agent/genetic keeps a fixed array plus body length
-//
-// This example follows the fixed-array layout so helpers can avoid per-turn allocations.
 type Body struct {
 	Parts [MaxBody]Point
 	Len   int
 }
 
 func NewBody(points []Point) Body {
-	var body Body
-	body.Set(points)
-	return body
+	var b Body
+	b.Set(points)
+	return b
 }
 
 func (b *Body) Set(points []Point) {
@@ -55,7 +47,7 @@ func (b Body) Facing() Direction {
 	if b.Len < 2 {
 		return DirNone
 	}
-	return FacingFromPoints(b.Parts[0], b.Parts[1])
+	return FacingPts(b.Parts[0], b.Parts[1])
 }
 
 func (b Body) Contains(p Point) bool {
@@ -67,7 +59,7 @@ func (b Body) Contains(p Point) bool {
 	return false
 }
 
-func (b *Body) CopyFrom(other Body) {
+func (b *Body) Copy(other Body) {
 	b.Len = other.Len
 	copy(b.Parts[:b.Len], other.Parts[:other.Len])
 }

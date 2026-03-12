@@ -45,174 +45,174 @@ var seed1001Apples = []Point{
 	{X: 3, Y: 12}, {X: 28, Y: 12},
 }
 
-// --- NewSupportTerrain (init + precompute) ----------------------------------
+// --- NewSTerrain (init + precompute) ----------------------------------------
 
-func BenchmarkNewSupportTerrain_Seed18(b *testing.B) {
+func BenchmarkNewSTerrain_Seed18(b *testing.B) {
 	walls := layoutWalls(seed18Layout)
-	grid := NewArenaGrid(len(seed18Layout[0]), len(seed18Layout), walls)
+	grid := NewAG(len(seed18Layout[0]), len(seed18Layout), walls)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		NewSupportTerrain(grid)
+		NewSTerrain(grid)
 	}
 }
 
-func BenchmarkNewSupportTerrain_Seed1001(b *testing.B) {
+func BenchmarkNewSTerrain_Seed1001(b *testing.B) {
 	walls := layoutWalls(seed1001Layout)
-	grid := NewArenaGrid(len(seed1001Layout[0]), len(seed1001Layout), walls)
+	grid := NewAG(len(seed1001Layout[0]), len(seed1001Layout), walls)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		NewSupportTerrain(grid)
+		NewSTerrain(grid)
 	}
 }
 
-// --- MinSoloLengthFromComponentToTarget (O(1) lookup) -----------------------
+// --- MinSoloLen (O(1) lookup) -----------------------------------------------
 
-func BenchmarkMinSoloLength_Seed18(b *testing.B) {
-	terrain := supportTerrainFromLayout(seed18Layout)
+func BenchmarkMinSoloLen_Seed18(b *testing.B) {
+	terrain := sTerrainFromLayout(seed18Layout)
 	body := []Point{{X: 2, Y: 1}, {X: 2, Y: 2}, {X: 2, Y: 3}}
 	target := Point{X: 7, Y: 0}
-	comp := terrain.AnchorComponent(body)
+	comp := terrain.AnchorComp(body)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.MinSoloLengthFromComponentToTarget(comp, target)
+		terrain.MinSoloLen(comp, target)
 	}
 }
 
-func BenchmarkMinSoloLength_Seed1001(b *testing.B) {
-	terrain := supportTerrainFromLayout(seed1001Layout)
+func BenchmarkMinSoloLen_Seed1001(b *testing.B) {
+	terrain := sTerrainFromLayout(seed1001Layout)
 	body := []Point{{X: 14, Y: 13}, {X: 14, Y: 14}, {X: 14, Y: 15}}
 	target := Point{X: 11, Y: 6}
-	comp := terrain.AnchorComponent(body)
+	comp := terrain.AnchorComp(body)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.MinSoloLengthFromComponentToTarget(comp, target)
+		terrain.MinSoloLen(comp, target)
 	}
 }
 
-// --- MinSoloLengthFromBodyToTarget (anchor + lookup) ------------------------
+// --- MinBodyLen (anchor + lookup) -------------------------------------------
 
-func BenchmarkMinSoloLengthFromBody_Seed1001(b *testing.B) {
-	terrain := supportTerrainFromLayout(seed1001Layout)
+func BenchmarkMinBodyLen_Seed1001(b *testing.B) {
+	terrain := sTerrainFromLayout(seed1001Layout)
 	body := []Point{{X: 14, Y: 13}, {X: 14, Y: 14}, {X: 14, Y: 15}}
 	target := Point{X: 11, Y: 6}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.MinSoloLengthFromBodyToTarget(body, target)
+		terrain.MinBodyLen(body, target)
 	}
 }
 
-// --- ApproachNodeIDs --------------------------------------------------------
+// --- ApprNodes --------------------------------------------------------------
 
-func BenchmarkApproachNodeIDs_ColdCache(b *testing.B) {
+func BenchmarkApprNodes_ColdCache(b *testing.B) {
 	walls := layoutWalls(seed1001Layout)
-	grid := NewArenaGrid(len(seed1001Layout[0]), len(seed1001Layout), walls)
+	grid := NewAG(len(seed1001Layout[0]), len(seed1001Layout), walls)
 	target := Point{X: 11, Y: 6}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		t := NewSupportTerrain(grid)
-		t.ApproachNodeIDs(target)
+		t := NewSTerrain(grid)
+		t.ApprNodes(target)
 	}
 }
 
-func BenchmarkApproachNodeIDs_WarmCache(b *testing.B) {
-	terrain := supportTerrainFromLayout(seed1001Layout)
+func BenchmarkApprNodes_WarmCache(b *testing.B) {
+	terrain := sTerrainFromLayout(seed1001Layout)
 	target := Point{X: 11, Y: 6}
-	terrain.ApproachNodeIDs(target) // warm
+	terrain.ApprNodes(target) // warm
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.ApproachNodeIDs(target)
+		terrain.ApprNodes(target)
 	}
 }
 
-// --- minImmediateLengthFromSupportToTarget (per-call BFS) -------------------
+// --- minImmLen (per-call BFS) -----------------------------------------------
 
-func BenchmarkMinImmediateLength_NearSupport(b *testing.B) {
+func BenchmarkMinImmLen_NearSupport(b *testing.B) {
 	state := stateFromLayout(seed1001Layout, seed1001Apples)
-	terrain := state.Terrain
+	terrain := state.Terr
 	support := Point{X: 10, Y: 8}
 	target := Point{X: 11, Y: 6}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.minImmediateLengthFromSupportToTarget(support, target, &state.Apples)
+		terrain.MinImmLen(support, target, &state.Apples)
 	}
 }
 
-func BenchmarkMinImmediateLength_FarSupport(b *testing.B) {
+func BenchmarkMinImmLen_FarSupport(b *testing.B) {
 	state := stateFromLayout(seed1001Layout, seed1001Apples)
-	terrain := state.Terrain
+	terrain := state.Terr
 	support := Point{X: 12, Y: 10}
 	target := Point{X: 11, Y: 6}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.minImmediateLengthFromSupportToTarget(support, target, &state.Apples)
+		terrain.MinImmLen(support, target, &state.Apples)
 	}
 }
 
-// --- targetApproaches (scan + many BFS) -------------------------------------
+// --- tAppr (scan + many BFS) ------------------------------------------------
 
-func BenchmarkTargetApproaches_TopApple(b *testing.B) {
+func BenchmarkTAppr_TopApple(b *testing.B) {
 	state := stateFromLayout(seed1001Layout, seed1001Apples)
-	terrain := state.Terrain
+	terrain := state.Terr
 	target := Point{X: 4, Y: 1}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.targetApproaches(&state.Apples, target)
+		terrain.TAppr(&state.Apples, target)
 	}
 }
 
-func BenchmarkTargetApproaches_MidApple(b *testing.B) {
+func BenchmarkTAppr_MidApple(b *testing.B) {
 	state := stateFromLayout(seed1001Layout, seed1001Apples)
-	terrain := state.Terrain
+	terrain := state.Terr
 	target := Point{X: 11, Y: 6}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.targetApproaches(&state.Apples, target)
+		terrain.TAppr(&state.Apples, target)
 	}
 }
 
-func BenchmarkTargetApproaches_BottomApple(b *testing.B) {
+func BenchmarkTAppr_BottomApple(b *testing.B) {
 	state := stateFromLayout(seed1001Layout, seed1001Apples)
-	terrain := state.Terrain
+	terrain := state.Terr
 	target := Point{X: 3, Y: 12}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.targetApproaches(&state.Apples, target)
+		terrain.TAppr(&state.Apples, target)
 	}
 }
 
-// --- closestSupports (targetApproaches + dedup) -----------------------------
+// --- closest (tAppr + dedup) ------------------------------------------------
 
-func BenchmarkClosestSupports_TopApple(b *testing.B) {
+func BenchmarkClosest_TopApple(b *testing.B) {
 	state := stateFromLayout(seed1001Layout, seed1001Apples)
-	terrain := state.Terrain
+	terrain := state.Terr
 	target := Point{X: 4, Y: 1}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.closestSupports(&state.Apples, target)
+		terrain.Closest(&state.Apples, target)
 	}
 }
 
-func BenchmarkClosestSupports_MidApple(b *testing.B) {
+func BenchmarkClosest_MidApple(b *testing.B) {
 	state := stateFromLayout(seed1001Layout, seed1001Apples)
-	terrain := state.Terrain
+	terrain := state.Terr
 	target := Point{X: 11, Y: 6}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.closestSupports(&state.Apples, target)
+		terrain.Closest(&state.Apples, target)
 	}
 }
 
-// --- RebuildAppleSupports (full per-turn cost) ------------------------------
+// --- RebuildSup (full per-turn cost) ----------------------------------------
 
-func BenchmarkRebuildAppleSupports_Seed1001(b *testing.B) {
+func BenchmarkRebuildSup_Seed1001(b *testing.B) {
 	state := stateFromLayout(seed1001Layout, seed1001Apples)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		state.RebuildAppleSupports()
+		state.RebuildSup()
 	}
 }
 
-func BenchmarkRebuildAppleSupports_Seed18(b *testing.B) {
+func BenchmarkRebuildSup_Seed18(b *testing.B) {
 	apples := []Point{
 		{X: 7, Y: 0}, {X: 10, Y: 0},
 		{X: 2, Y: 4}, {X: 15, Y: 4},
@@ -221,7 +221,7 @@ func BenchmarkRebuildAppleSupports_Seed18(b *testing.B) {
 	state := stateFromLayout(seed18Layout, apples)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		state.RebuildAppleSupports()
+		state.RebuildSup()
 	}
 }
 

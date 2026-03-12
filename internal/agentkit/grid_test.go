@@ -4,17 +4,17 @@ import "testing"
 
 // --- Point ------------------------------------------------------------------
 
-func TestManhattanDistance(t *testing.T) {
-	got := ManhattanDistance(Point{X: 1, Y: 2}, Point{X: 4, Y: -3})
+func TestMDist(t *testing.T) {
+	got := MDist(Point{X: 1, Y: 2}, Point{X: 4, Y: -3})
 	if got != 8 {
-		t.Fatalf("ManhattanDistance() = %d, want 8", got)
+		t.Fatalf("MDist() = %d, want 8", got)
 	}
 }
 
 // --- BitGrid ----------------------------------------------------------------
 
 func TestBitGrid(t *testing.T) {
-	grid := NewBitGrid(5, 4)
+	grid := NewBG(5, 4)
 	p := Point{X: 2, Y: 3}
 
 	if grid.Has(p) {
@@ -39,7 +39,7 @@ func TestBitGrid(t *testing.T) {
 }
 
 func BenchmarkBitGridHas(b *testing.B) {
-	grid := NewBitGrid(45, 30)
+	grid := NewBG(45, 30)
 	for y := 0; y < 30; y += 3 {
 		for x := 0; x < 45; x += 3 {
 			grid.Set(Point{X: x, Y: y})
@@ -61,7 +61,7 @@ func BenchmarkBitGridHas(b *testing.B) {
 }
 
 func BenchmarkBitGridSet(b *testing.B) {
-	grid := NewBitGrid(45, 30)
+	grid := NewBG(45, 30)
 	points := make([]Point, 0, 45*30)
 	for y := 0; y < 30; y++ {
 		for x := 0; x < 45; x++ {
@@ -78,7 +78,7 @@ func BenchmarkBitGridSet(b *testing.B) {
 }
 
 func BenchmarkBitGridReset(b *testing.B) {
-	grid := NewBitGrid(45, 30)
+	grid := NewBG(45, 30)
 	for y := 0; y < 30; y += 2 {
 		for x := 0; x < 45; x += 2 {
 			grid.Set(Point{X: x, Y: y})
@@ -91,32 +91,32 @@ func BenchmarkBitGridReset(b *testing.B) {
 	}
 }
 
-// --- ArenaGrid --------------------------------------------------------------
+// --- AGrid ------------------------------------------------------------------
 
-func TestArenaGridWallBelow(t *testing.T) {
-	grid := NewArenaGrid(4, 4, map[Point]bool{
+func TestAGridWBelow(t *testing.T) {
+	grid := NewAG(4, 4, map[Point]bool{
 		{X: 1, Y: 1}: true,
 		{X: 2, Y: 2}: true,
 		{X: 1, Y: 3}: true,
 	})
 
-	if !grid.WallBelow(Point{X: 1, Y: 2}) {
-		t.Fatalf("WallBelow() = false, want true")
+	if !grid.WBelow(Point{X: 1, Y: 2}) {
+		t.Fatalf("WBelow() = false, want true")
 	}
-	if grid.WallBelow(Point{X: 0, Y: 1}) {
-		t.Fatalf("WallBelow() = true, want false")
+	if grid.WBelow(Point{X: 0, Y: 1}) {
+		t.Fatalf("WBelow() = true, want false")
 	}
 }
 
-func TestAppleDistanceField(t *testing.T) {
-	grid := NewArenaGrid(5, 4, map[Point]bool{
+func TestAppleDist(t *testing.T) {
+	grid := NewAG(5, 4, map[Point]bool{
 		{X: 2, Y: 1}: true,
 	})
-	apples := NewBitGrid(5, 4)
+	apples := NewBG(5, 4)
 	apples.Set(Point{X: 4, Y: 0})
 	apples.Set(Point{X: 0, Y: 3})
 
-	field := grid.AppleDistanceField(&apples)
+	field := grid.AppleDist(&apples)
 
 	tests := map[Point]int{
 		{X: 4, Y: 0}: 0,
@@ -130,39 +130,39 @@ func TestAppleDistanceField(t *testing.T) {
 		}
 	}
 
-	if got := field.At(Point{X: 2, Y: 1}); got != UnreachableDistance {
-		t.Fatalf("wall distance = %d, want %d", got, UnreachableDistance)
+	if got := field.At(Point{X: 2, Y: 1}); got != Unreachable {
+		t.Fatalf("wall distance = %d, want %d", got, Unreachable)
 	}
 }
 
-func TestFloodCount(t *testing.T) {
-	grid := NewArenaGrid(5, 4, map[Point]bool{
+func TestFlood(t *testing.T) {
+	grid := NewAG(5, 4, map[Point]bool{
 		{X: 1, Y: 1}: true,
 		{X: 2, Y: 1}: true,
 	})
-	occ := NewBitGrid(5, 4)
+	occ := NewBG(5, 4)
 	occ.Set(Point{X: 0, Y: 0})
 	occ.Set(Point{X: 3, Y: 0})
 
-	if got := grid.FloodCount(Point{X: 0, Y: 0}, &occ, 100); got != 17 {
-		t.Fatalf("FloodCount() = %d, want 17", got)
+	if got := grid.Flood(Point{X: 0, Y: 0}, &occ, 100); got != 17 {
+		t.Fatalf("Flood() = %d, want 17", got)
 	}
-	if got := grid.FloodCount(Point{X: 0, Y: 0}, &occ, 5); got != 5 {
-		t.Fatalf("FloodCount() with cap = %d, want 5", got)
+	if got := grid.Flood(Point{X: 0, Y: 0}, &occ, 5); got != 5 {
+		t.Fatalf("Flood() with cap = %d, want 5", got)
 	}
 }
 
 // --- State ------------------------------------------------------------------
 
-func TestStateValidMoves(t *testing.T) {
-	grid := NewArenaGrid(4, 4, map[Point]bool{
+func TestStateVMoves(t *testing.T) {
+	grid := NewAG(4, 4, map[Point]bool{
 		{X: 1, Y: 1}: true,
 		{X: 2, Y: 2}: true,
 		{X: 1, Y: 3}: true,
 	})
 	state := NewState(grid)
 
-	moves := state.ValidMoves(Point{X: 1, Y: 2}, DirUp)
+	moves := state.VMoves(Point{X: 1, Y: 2}, DirUp)
 	want := []Direction{DirLeft}
 	if len(moves) != len(want) {
 		t.Fatalf("len(moves) = %d, want %d", len(moves), len(want))
@@ -174,15 +174,15 @@ func TestStateValidMoves(t *testing.T) {
 	}
 }
 
-func TestStateAppleDistanceField(t *testing.T) {
-	grid := NewArenaGrid(5, 4, map[Point]bool{
+func TestStateAppleDist(t *testing.T) {
+	grid := NewAG(5, 4, map[Point]bool{
 		{X: 2, Y: 1}: true,
 	})
 	state := NewState(grid)
 	state.Apples.Set(Point{X: 4, Y: 0})
 	state.Apples.Set(Point{X: 0, Y: 3})
 
-	field := state.AppleDistanceField()
+	field := state.AppleDist()
 
 	if got := field.At(Point{X: 4, Y: 0}); got != 0 {
 		t.Fatalf("distance at apple = %d, want 0", got)
@@ -194,8 +194,8 @@ func TestStateAppleDistanceField(t *testing.T) {
 
 // --- Benchmarks -------------------------------------------------------------
 
-func BenchmarkAppleDistanceField(b *testing.B) {
-	grid := NewArenaGrid(45, 30, map[Point]bool{
+func BenchmarkAppleDist(b *testing.B) {
+	grid := NewAG(45, 30, map[Point]bool{
 		{X: 8, Y: 5}:   true,
 		{X: 8, Y: 6}:   true,
 		{X: 8, Y: 7}:   true,
@@ -203,22 +203,22 @@ func BenchmarkAppleDistanceField(b *testing.B) {
 		{X: 24, Y: 15}: true,
 		{X: 24, Y: 16}: true,
 	})
-	apples := NewBitGrid(45, 30)
+	apples := NewBG(45, 30)
 	apples.Set(Point{X: 3, Y: 3})
 	apples.Set(Point{X: 20, Y: 12})
 	apples.Set(Point{X: 39, Y: 26})
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		field := grid.AppleDistanceField(&apples)
+		field := grid.AppleDist(&apples)
 		if field.At(Point{X: 20, Y: 12}) != 0 {
 			b.Fatal("bad distance field")
 		}
 	}
 }
 
-func BenchmarkFloodCount(b *testing.B) {
-	grid := NewArenaGrid(45, 30, map[Point]bool{
+func BenchmarkFlood(b *testing.B) {
+	grid := NewAG(45, 30, map[Point]bool{
 		{X: 8, Y: 5}:   true,
 		{X: 8, Y: 6}:   true,
 		{X: 8, Y: 7}:   true,
@@ -226,14 +226,14 @@ func BenchmarkFloodCount(b *testing.B) {
 		{X: 24, Y: 15}: true,
 		{X: 24, Y: 16}: true,
 	})
-	occ := NewBitGrid(45, 30)
+	occ := NewBG(45, 30)
 	occ.Set(Point{X: 10, Y: 10})
 	occ.Set(Point{X: 11, Y: 10})
 	occ.Set(Point{X: 12, Y: 10})
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if got := grid.FloodCount(Point{X: 10, Y: 10}, &occ, 200); got == 0 {
+		if got := grid.Flood(Point{X: 10, Y: 10}, &occ, 200); got == 0 {
 			b.Fatal("unexpected zero flood count")
 		}
 	}

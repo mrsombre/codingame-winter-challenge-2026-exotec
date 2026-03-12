@@ -55,14 +55,14 @@ func TestBodyHeadTailFacingContains(t *testing.T) {
 	}
 }
 
-func TestBodyCopyFromAndReset(t *testing.T) {
+func TestBodyCopyAndReset(t *testing.T) {
 	src := NewBody([]Point{
 		{X: 0, Y: 0},
 		{X: 1, Y: 0},
 	})
 
 	var dst Body
-	dst.CopyFrom(src)
+	dst.Copy(src)
 
 	if dst.Len != src.Len {
 		t.Fatalf("Len = %d, want %d", dst.Len, src.Len)
@@ -73,7 +73,7 @@ func TestBodyCopyFromAndReset(t *testing.T) {
 
 	src.Parts[0] = Point{X: 9, Y: 9}
 	if dst.Slice()[0] == src.Slice()[0] {
-		t.Fatalf("CopyFrom() should copy values, not alias source")
+		t.Fatalf("Copy() should copy values, not alias source")
 	}
 
 	dst.Reset()
