@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(go mod *)",
+      "Skill(agent-browser)",
+      "Bash(* go run *)",
+      "Bash(* go build *)",
+      "Bash(* go test *)",
+      "Bash(* go mod *)",
       "Bash(make *)"
     ]
   }

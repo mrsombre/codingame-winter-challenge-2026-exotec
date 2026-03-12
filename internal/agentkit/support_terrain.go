@@ -7,17 +7,12 @@ type StaticSupportNode struct {
 	Neighbors []int
 }
 
-type supportTargetKey struct {
-	ComponentID int
-	Target      Point
-}
-
 type TargetApproach struct {
 	SupportCell Point
 	MinLen      int
 }
 
-// SupportTerrain stores static terrain-only support structure and solo climb gates.
+// SupportTerrain stores static terrain support structure with precomputed distances.
 type SupportTerrain struct {
 	Grid           *ArenaGrid
 	NodeID         []int
@@ -25,78 +20,211 @@ type SupportTerrain struct {
 	ComponentID    []int
 	ComponentCount int
 
+	cells         int
+	minLen        []int // [comp * cells + cellIdx] = min bot length
 	approachCache map[Point][]int
-	minLenCache   map[supportTargetKey]int
+
+	// Scratch buffer for apple-aware BFS, reused across calls.
+	immBuf immediateBuf
+
+	// Precomputed list of wall support cells: walls with open cell above.
+	wallSupports []Point
+}
+
+// immediateBuf is a reusable scratch buffer for BFS calls.
+type immediateBuf struct {
+	visited []uint32
+	gen     uint32
+	buckets [][]immSt
+	maxLen  int
+}
+
+type immSt struct {
+	pos  Point
+	run  int
+	dist int
+}
+
+func (b *immediateBuf) init(cells, maxLen int) {
+	b.maxLen = maxLen
+	b.visited = make([]uint32, cells*(maxLen+1))
+	b.buckets = make([][]immSt, maxLen+1)
+}
+
+func (b *immediateBuf) reset() {
+	b.gen++
+	if b.gen == 0 {
+		for i := range b.visited {
+			b.visited[i] = 0
+		}
+		b.gen = 1
+	}
+	for i := range b.buckets {
+		b.buckets[i] = b.buckets[i][:0]
+	}
+}
+
+func (b *immediateBuf) mark(key int) {
+	b.visited[key] = b.gen
+}
+
+func (b *immediateBuf) seen(key int) bool {
+	return b.visited[key] == b.gen
 }
 
 func NewSupportTerrain(grid *ArenaGrid) *SupportTerrain {
-	terrain := &SupportTerrain{
+	t := &SupportTerrain{
 		Grid:          grid,
 		NodeID:        make([]int, grid.Width*grid.Height),
+		cells:         grid.Width * grid.Height,
 		approachCache: map[Point][]int{},
-		minLenCache:   map[supportTargetKey]int{},
 	}
-	for i := range terrain.NodeID {
-		terrain.NodeID[i] = -1
+	for i := range t.NodeID {
+		t.NodeID[i] = -1
 	}
 
 	for y := 0; y < grid.Height; y++ {
 		for x := 0; x < grid.Width; x++ {
 			p := Point{X: x, Y: y}
-			if grid.IsWall(p) || !terrain.HasStaticSupport(p) {
+			if grid.IsWall(p) || !t.HasStaticSupport(p) {
 				continue
 			}
-			terrain.NodeID[grid.cellIdx(p)] = len(terrain.Nodes)
-			terrain.Nodes = append(terrain.Nodes, StaticSupportNode{Pos: p})
+			t.NodeID[grid.CellIdx(p)] = len(t.Nodes)
+			t.Nodes = append(t.Nodes, StaticSupportNode{Pos: p})
 		}
 	}
 
-	for id := range terrain.Nodes {
-		p := terrain.Nodes[id].Pos
+	for id := range t.Nodes {
+		p := t.Nodes[id].Pos
 		neighbors := make([]int, 0, 8)
 		for dy := -1; dy <= 1; dy++ {
 			for dx := -1; dx <= 1; dx++ {
 				if dx == 0 && dy == 0 {
 					continue
 				}
-				nid := terrain.SupportNodeAt(Point{X: p.X + dx, Y: p.Y + dy})
-				if nid == -1 {
-					continue
+				if nid := t.SupportNodeAt(Point{X: p.X + dx, Y: p.Y + dy}); nid != -1 {
+					neighbors = append(neighbors, nid)
 				}
-				neighbors = append(neighbors, nid)
 			}
 		}
-		terrain.Nodes[id].Neighbors = neighbors
+		t.Nodes[id].Neighbors = neighbors
 	}
 
-	terrain.ComponentID = make([]int, len(terrain.Nodes))
-	for i := range terrain.ComponentID {
-		terrain.ComponentID[i] = -1
+	t.ComponentID = make([]int, len(t.Nodes))
+	for i := range t.ComponentID {
+		t.ComponentID[i] = -1
 	}
-
-	queue := make([]int, 0, len(terrain.Nodes))
-	for id := range terrain.Nodes {
-		if terrain.ComponentID[id] != -1 {
+	queue := make([]int, 0, len(t.Nodes))
+	for id := range t.Nodes {
+		if t.ComponentID[id] != -1 {
 			continue
 		}
-		compID := terrain.ComponentCount
-		terrain.ComponentCount++
-		terrain.ComponentID[id] = compID
+		compID := t.ComponentCount
+		t.ComponentCount++
+		t.ComponentID[id] = compID
 		queue = queue[:0]
 		queue = append(queue, id)
 		for i := 0; i < len(queue); i++ {
-			cur := queue[i]
-			for _, next := range terrain.Nodes[cur].Neighbors {
-				if terrain.ComponentID[next] != -1 {
+			for _, next := range t.Nodes[queue[i]].Neighbors {
+				if t.ComponentID[next] != -1 {
 					continue
 				}
-				terrain.ComponentID[next] = compID
+				t.ComponentID[next] = compID
 				queue = append(queue, next)
 			}
 		}
 	}
 
-	return terrain
+	// Precompute wall support list: wall cells with open cell directly above.
+	for y := 1; y < grid.Height; y++ {
+		for x := 0; x < grid.Width; x++ {
+			support := Point{X: x, Y: y}
+			if !grid.IsWall(support) {
+				continue
+			}
+			stand := Point{X: x, Y: y - 1}
+			if grid.IsWall(stand) {
+				continue
+			}
+			t.wallSupports = append(t.wallSupports, support)
+		}
+	}
+
+	t.precomputeMinLengths()
+
+	maxLen := grid.Width + grid.Height
+	if maxLen < 1 {
+		maxLen = 1
+	}
+	t.immBuf.init(t.cells, maxLen)
+
+	return t
+}
+
+// precomputeMinLengths uses bucket-BFS per component to fill minLen table.
+func (t *SupportTerrain) precomputeMinLengths() {
+	maxRun := t.Grid.Width + t.Grid.Height
+	if maxRun < 1 {
+		maxRun = 1
+	}
+	t.minLen = make([]int, t.ComponentCount*t.cells)
+	for i := range t.minLen {
+		t.minLen[i] = UnreachableDistance
+	}
+
+	type st struct {
+		pos Point
+		run int
+	}
+
+	for comp := 0; comp < t.ComponentCount; comp++ {
+		off := comp * t.cells
+		visited := make([]bool, t.cells*(maxRun+1))
+		buckets := make([][]st, maxRun+1)
+
+		for id, node := range t.Nodes {
+			if t.ComponentID[id] != comp {
+				continue
+			}
+			idx := t.Grid.CellIdx(node.Pos)
+			visited[idx*(maxRun+1)+1] = true
+			buckets[1] = append(buckets[1], st{pos: node.Pos, run: 1})
+		}
+
+		for L := 1; L <= maxRun; L++ {
+			for i := 0; i < len(buckets[L]); i++ {
+				cur := buckets[L][i]
+				idx := t.Grid.CellIdx(cur.pos)
+				if t.minLen[off+idx] > L {
+					t.minLen[off+idx] = L
+				}
+
+				for dir := DirUp; dir <= DirLeft; dir++ {
+					next := Add(cur.pos, DirectionDeltas[dir])
+					if t.Grid.IsWall(next) {
+						continue
+					}
+					nextRun := cur.run + 1
+					if t.HasStaticSupport(next) {
+						nextRun = 1
+					}
+					if nextRun > maxRun {
+						continue
+					}
+					vKey := t.Grid.CellIdx(next)*(maxRun+1) + nextRun
+					if visited[vKey] {
+						continue
+					}
+					visited[vKey] = true
+					cost := L
+					if nextRun > L {
+						cost = nextRun
+					}
+					buckets[cost] = append(buckets[cost], st{pos: next, run: nextRun})
+				}
+			}
+		}
+	}
 }
 
 func (t *SupportTerrain) HasStaticSupport(p Point) bool {
@@ -107,7 +235,7 @@ func (t *SupportTerrain) SupportNodeAt(p Point) int {
 	if !t.Grid.InBounds(p) {
 		return -1
 	}
-	return t.NodeID[t.Grid.cellIdx(p)]
+	return t.NodeID[t.Grid.CellIdx(p)]
 }
 
 func (t *SupportTerrain) AnchorNode(body []Point) int {
@@ -175,205 +303,58 @@ func (t *SupportTerrain) ApproachNodeIDs(target Point) []int {
 	return append([]int(nil), nodes...)
 }
 
+// MinSoloLengthFromComponentToTarget returns the precomputed min bot length
+// needed for a bot in the given component to reach target using static support only.
 func (t *SupportTerrain) MinSoloLengthFromComponentToTarget(componentID int, target Point) int {
 	if componentID < 0 || componentID >= t.ComponentCount || t.Grid.IsWall(target) {
 		return UnreachableDistance
 	}
-	key := supportTargetKey{ComponentID: componentID, Target: target}
-	if cached, ok := t.minLenCache[key]; ok {
-		return cached
-	}
-
-	type state struct {
-		pos Point
-		run int
-	}
-
-	maxLen := t.Grid.Width + t.Grid.Height
-	if maxLen < 1 {
-		maxLen = 1
-	}
-
-	for need := 1; need <= maxLen; need++ {
-		visited := make([][]bool, t.Grid.Width*t.Grid.Height)
-		for i := range visited {
-			visited[i] = make([]bool, need+1)
-		}
-
-		queue := make([]state, 0, len(t.Nodes))
-		for id, node := range t.Nodes {
-			if t.ComponentID[id] != componentID {
-				continue
-			}
-			idx := t.Grid.cellIdx(node.Pos)
-			visited[idx][1] = true
-			queue = append(queue, state{pos: node.Pos, run: 1})
-		}
-
-		for i := 0; i < len(queue); i++ {
-			cur := queue[i]
-			if cur.pos == target {
-				t.minLenCache[key] = need
-				return need
-			}
-
-			for dir := DirUp; dir <= DirLeft; dir++ {
-				next := Add(cur.pos, DirectionDeltas[dir])
-				if t.Grid.IsWall(next) {
-					continue
-				}
-				nextRun := cur.run + 1
-				if t.HasStaticSupport(next) {
-					nextRun = 1
-				}
-				if nextRun > need {
-					continue
-				}
-				idx := t.Grid.cellIdx(next)
-				if visited[idx][nextRun] {
-					continue
-				}
-				visited[idx][nextRun] = true
-				queue = append(queue, state{pos: next, run: nextRun})
-			}
-		}
-	}
-
-	t.minLenCache[key] = UnreachableDistance
-	return UnreachableDistance
+	return t.minLen[componentID*t.cells+t.Grid.CellIdx(target)]
 }
 
 func (t *SupportTerrain) MinSoloLengthFromBodyToTarget(body []Point, target Point) int {
 	return t.MinSoloLengthFromComponentToTarget(t.AnchorComponent(body), target)
 }
 
-func (t *SupportTerrain) hasSupportBelowWithApples(p Point, apples *BitGrid) bool {
-	below := Point{X: p.X, Y: p.Y + 1}
-	if t.Grid.IsWall(below) {
-		return true
-	}
-	return apples != nil && apples.Has(below)
-}
+// --- Apple-aware support finding ---
 
-func (t *SupportTerrain) minLengthFromStandToPoint(stand, target Point, apples *BitGrid) (int, int) {
-	if t.Grid.IsWall(stand) || t.Grid.IsWall(target) {
-		return UnreachableDistance, UnreachableDistance
-	}
-
-	type state struct {
-		pos Point
-		run int
-	}
-
-	maxLen := t.Grid.Width + t.Grid.Height
-	if maxLen < 1 {
-		maxLen = 1
-	}
-
-	for need := 1; need <= maxLen; need++ {
-		visited := make([][]bool, t.Grid.Width*t.Grid.Height)
-		dist := make([][]int, t.Grid.Width*t.Grid.Height)
-		for i := range visited {
-			visited[i] = make([]bool, need+1)
-			dist[i] = make([]int, need+1)
-			for run := range dist[i] {
-				dist[i][run] = UnreachableDistance
-			}
-		}
-
-		queue := make([]state, 0, t.Grid.Width*t.Grid.Height)
-		startIdx := t.Grid.cellIdx(stand)
-		visited[startIdx][1] = true
-		dist[startIdx][1] = 0
-		queue = append(queue, state{pos: stand, run: 1})
-
-		for i := 0; i < len(queue); i++ {
-			cur := queue[i]
-			curIdx := t.Grid.cellIdx(cur.pos)
-			curDist := dist[curIdx][cur.run]
-			if cur.pos == target {
-				return need, curDist
-			}
-
-			for dir := DirUp; dir <= DirLeft; dir++ {
-				next := Add(cur.pos, DirectionDeltas[dir])
-				if t.Grid.IsWall(next) {
-					continue
-				}
-				nextRun := cur.run + 1
-				if t.hasSupportBelowWithApples(next, apples) {
-					nextRun = 1
-				}
-				if nextRun > need {
-					continue
-				}
-				nextIdx := t.Grid.cellIdx(next)
-				if visited[nextIdx][nextRun] {
-					continue
-				}
-				visited[nextIdx][nextRun] = true
-				dist[nextIdx][nextRun] = curDist + 1
-				queue = append(queue, state{pos: next, run: nextRun})
-			}
-		}
-	}
-
-	return UnreachableDistance, UnreachableDistance
-}
-
+// minImmediateLengthFromSupportToTarget computes the min bot length needed
+// to reach an adjacent cell of target, starting from the stand position
+// (one row above supportCell). Uses single-pass bucket-BFS with reusable buffers.
 func (t *SupportTerrain) minImmediateLengthFromSupportToTarget(supportCell, target Point, apples *BitGrid) (int, int) {
 	stand := Point{X: supportCell.X, Y: supportCell.Y - 1}
 	if stand.Y < 0 || t.Grid.IsWall(stand) {
 		return UnreachableDistance, UnreachableDistance
 	}
 
-	adjacent := make([]Point, 0, 4)
+	var adj [4]Point
+	adjN := 0
 	for dir := DirUp; dir <= DirLeft; dir++ {
 		head := Add(target, DirectionDeltas[Opposite(dir)])
-		if t.Grid.IsWall(head) {
-			continue
+		if !t.Grid.IsWall(head) {
+			adj[adjN] = head
+			adjN++
 		}
-		adjacent = append(adjacent, head)
 	}
-	if len(adjacent) == 0 {
+	if adjN == 0 {
 		return UnreachableDistance, UnreachableDistance
 	}
 
-	type state struct {
-		pos Point
-		run int
-	}
-
 	isAppleTarget := apples != nil && apples.Has(target)
-	maxLen := t.Grid.Width + t.Grid.Height
-	if maxLen < 1 {
-		maxLen = 1
-	}
+	buf := &t.immBuf
+	maxLen := buf.maxLen
+	buf.reset()
 
-	for need := 1; need <= maxLen; need++ {
-		visited := make([][]bool, t.Grid.Width*t.Grid.Height)
-		dist := make([][]int, t.Grid.Width*t.Grid.Height)
-		for i := range visited {
-			visited[i] = make([]bool, need+1)
-			dist[i] = make([]int, need+1)
-			for run := range dist[i] {
-				dist[i][run] = UnreachableDistance
-			}
-		}
+	startIdx := t.Grid.CellIdx(stand)
+	buf.mark(startIdx*(maxLen+1) + 1)
+	buf.buckets[1] = append(buf.buckets[1], immSt{pos: stand, run: 1, dist: 0})
 
-		queue := make([]state, 0, t.Grid.Width*t.Grid.Height)
-		startIdx := t.Grid.cellIdx(stand)
-		visited[startIdx][1] = true
-		dist[startIdx][1] = 0
-		queue = append(queue, state{pos: stand, run: 1})
-
-		for i := 0; i < len(queue); i++ {
-			cur := queue[i]
-			curIdx := t.Grid.cellIdx(cur.pos)
-			curDist := dist[curIdx][cur.run]
-			for _, head := range adjacent {
-				if cur.pos == head {
-					return need, curDist
+	for L := 1; L <= maxLen; L++ {
+		for i := 0; i < len(buf.buckets[L]); i++ {
+			cur := buf.buckets[L][i]
+			for a := 0; a < adjN; a++ {
+				if cur.pos == adj[a] {
+					return L, cur.dist
 				}
 			}
 
@@ -394,16 +375,21 @@ func (t *SupportTerrain) minImmediateLengthFromSupportToTarget(supportCell, targ
 				if isAppleTarget && below == target {
 					nextRun = 1
 				}
-				if nextRun > need {
+				if nextRun > maxLen {
 					continue
 				}
-				nextIdx := t.Grid.cellIdx(next)
-				if visited[nextIdx][nextRun] {
+
+				vKey := t.Grid.CellIdx(next)*(maxLen+1) + nextRun
+				if buf.seen(vKey) {
 					continue
 				}
-				visited[nextIdx][nextRun] = true
-				dist[nextIdx][nextRun] = curDist + 1
-				queue = append(queue, state{pos: next, run: nextRun})
+				buf.mark(vKey)
+
+				cost := L
+				if nextRun > L {
+					cost = nextRun
+				}
+				buf.buckets[cost] = append(buf.buckets[cost], immSt{pos: next, run: nextRun, dist: cur.dist + 1})
 			}
 		}
 	}
@@ -416,42 +402,36 @@ func (t *SupportTerrain) targetApproaches(apples *BitGrid, target Point) []Targe
 		return nil
 	}
 
-	var supportCells []TargetApproach
-	for y := target.Y; y < t.Grid.Height; y++ {
-		for x := 0; x < t.Grid.Width; x++ {
-			support := Point{X: x, Y: y}
-			if support == target {
-				continue
-			}
-			stand := Point{X: x, Y: y - 1}
-			if stand.Y < 0 || t.Grid.IsWall(stand) {
-				continue
-			}
-			if t.Grid.IsWall(support) {
-				supportCells = append(supportCells, TargetApproach{
-					SupportCell: support,
-				})
-				continue
-			}
-			if apples != nil && apples.Has(support) {
-				supportCells = append(supportCells, TargetApproach{
-					SupportCell: support,
-				})
-			}
+	var approaches []TargetApproach
+
+	// Wall supports (precomputed list).
+	for _, support := range t.wallSupports {
+		if support.Y < target.Y || support == target {
+			continue
+		}
+		minLen, _ := t.minImmediateLengthFromSupportToTarget(support, target, apples)
+		if minLen != UnreachableDistance {
+			approaches = append(approaches, TargetApproach{SupportCell: support, MinLen: minLen})
 		}
 	}
 
-	approaches := make([]TargetApproach, 0, len(supportCells))
-	for _, base := range supportCells {
-		best := TargetApproach{}
-		best.MinLen = UnreachableDistance
-		minLen, dist := t.minImmediateLengthFromSupportToTarget(base.SupportCell, target, apples)
-		bestDist := dist
-		best = base
-		best.MinLen = minLen
-		if best.MinLen != UnreachableDistance {
-			approaches = append(approaches, best)
-			_ = bestDist
+	// Apple supports.
+	if apples != nil {
+		for y := target.Y; y < t.Grid.Height; y++ {
+			for x := 0; x < t.Grid.Width; x++ {
+				p := Point{X: x, Y: y}
+				if p == target || t.Grid.IsWall(p) || !apples.Has(p) {
+					continue
+				}
+				stand := Point{X: x, Y: y - 1}
+				if stand.Y < 0 || t.Grid.IsWall(stand) {
+					continue
+				}
+				minLen, _ := t.minImmediateLengthFromSupportToTarget(p, target, apples)
+				if minLen != UnreachableDistance {
+					approaches = append(approaches, TargetApproach{SupportCell: p, MinLen: minLen})
+				}
+			}
 		}
 	}
 
@@ -462,10 +442,7 @@ func (t *SupportTerrain) targetApproaches(apples *BitGrid, target Point) []Targe
 		if approaches[i].SupportCell.Y != approaches[j].SupportCell.Y {
 			return approaches[i].SupportCell.Y < approaches[j].SupportCell.Y
 		}
-		if approaches[i].SupportCell.X != approaches[j].SupportCell.X {
-			return approaches[i].SupportCell.X < approaches[j].SupportCell.X
-		}
-		return false
+		return approaches[i].SupportCell.X < approaches[j].SupportCell.X
 	})
 
 	return approaches
@@ -477,13 +454,9 @@ func (t *SupportTerrain) closestSupports(apples *BitGrid, target Point) []Target
 		return nil
 	}
 
-	type compState struct {
-		cell Point
-	}
-
 	supports := make(map[Point]TargetApproach, len(approaches))
-	for _, approach := range approaches {
-		supports[approach.SupportCell] = approach
+	for _, a := range approaches {
+		supports[a.SupportCell] = a
 	}
 
 	componentOf := make(map[Point]int, len(supports))
@@ -524,32 +497,34 @@ func (t *SupportTerrain) closestSupports(apples *BitGrid, target Point) []Target
 	}
 
 	bestByComponent := make(map[int]TargetApproach, componentCount)
-	for _, approach := range approaches {
-		compID := componentOf[approach.SupportCell]
+	for _, a := range approaches {
+		compID := componentOf[a.SupportCell]
 		best, ok := bestByComponent[compID]
 		if !ok ||
-			approach.MinLen < best.MinLen ||
-			(approach.MinLen == best.MinLen &&
-				ManhattanDistance(approach.SupportCell, target) < ManhattanDistance(best.SupportCell, target)) ||
-			(approach.MinLen == best.MinLen &&
-				ManhattanDistance(approach.SupportCell, target) == ManhattanDistance(best.SupportCell, target) &&
-				(approach.SupportCell.Y < best.SupportCell.Y ||
-					(approach.SupportCell.Y == best.SupportCell.Y && approach.SupportCell.X < best.SupportCell.X))) {
-			bestByComponent[compID] = approach
+			a.MinLen < best.MinLen ||
+			(a.MinLen == best.MinLen &&
+				ManhattanDistance(a.SupportCell, target) < ManhattanDistance(best.SupportCell, target)) ||
+			(a.MinLen == best.MinLen &&
+				ManhattanDistance(a.SupportCell, target) == ManhattanDistance(best.SupportCell, target) &&
+				(a.SupportCell.Y < best.SupportCell.Y ||
+					(a.SupportCell.Y == best.SupportCell.Y && a.SupportCell.X < best.SupportCell.X))) {
+			bestByComponent[compID] = a
 		}
 	}
 
 	closest := make([]TargetApproach, 0, len(bestByComponent))
-	for _, approach := range bestByComponent {
-		closest = append(closest, approach)
+	for _, a := range bestByComponent {
+		closest = append(closest, a)
 	}
 
 	sort.Slice(closest, func(i, j int) bool {
 		if closest[i].MinLen != closest[j].MinLen {
 			return closest[i].MinLen < closest[j].MinLen
 		}
-		if ManhattanDistance(closest[i].SupportCell, target) != ManhattanDistance(closest[j].SupportCell, target) {
-			return ManhattanDistance(closest[i].SupportCell, target) < ManhattanDistance(closest[j].SupportCell, target)
+		di := ManhattanDistance(closest[i].SupportCell, target)
+		dj := ManhattanDistance(closest[j].SupportCell, target)
+		if di != dj {
+			return di < dj
 		}
 		if closest[i].SupportCell.Y != closest[j].SupportCell.Y {
 			return closest[i].SupportCell.Y < closest[j].SupportCell.Y

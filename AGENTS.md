@@ -43,9 +43,6 @@ make match LOGIC=greed
 
 # arbitrary binary-vs-binary match
 make match-bin P0=greed P1=opponent
-
-# standalone go commands also work when GOCACHE is set
-env GOCACHE=/tmp/go-build go test ./...
 ```
 
 ## Match Workflow

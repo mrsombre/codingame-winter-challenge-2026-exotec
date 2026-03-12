@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -60,7 +59,7 @@ func newCommandPlayer(player *engine.Player, path string) (*commandPlayer, error
 	}
 	go func() {
 		defer close(cp.stderrDone)
-		_, _ = io.Copy(os.Stderr, stderr)
+		_, _ = io.Copy(io.Discard, stderr)
 	}()
 	return cp, nil
 }
