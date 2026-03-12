@@ -207,6 +207,24 @@ func (g *AGrid) AppleDist(apples *BitGrid) DField {
 	return field
 }
 
+// FillBG resets bg then sets every point in pts.
+func FillBG(bg *BitGrid, pts []Point) {
+	bg.Reset()
+	for _, p := range pts {
+		bg.Set(p)
+	}
+}
+
+// OccExcept returns a copy of base with all body positions cleared.
+func OccExcept(base *BitGrid, body []Point) BitGrid {
+	bg := NewBG(base.Width, base.Height)
+	copy(bg.Bits, base.Bits)
+	for _, p := range body {
+		bg.Clear(p)
+	}
+	return bg
+}
+
 func (g *AGrid) Flood(start Point, occupied *BitGrid, maxN int) int {
 	if maxN <= 0 || !g.InB(start) || g.IsWall(start) {
 		return 0

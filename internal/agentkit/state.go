@@ -19,6 +19,7 @@ type State struct {
 
 	// Scratch
 	MvBuf    [4]Direction
+	SimBuf   [MaxBody + 1]Point
 	FloodVis BitGrid
 	FloodQ   []Point
 	DistVals []int
@@ -147,6 +148,43 @@ func (s *State) Flood(start Point, occupied *BitGrid, maxN int) int {
 	s.FloodQ = q[:0]
 
 	return count
+}
+
+// FloodDist returns (reachable count, per-cell BFS distance) from start.
+// Allocates a new distance slice each call; reuses s.DistQ as queue scratch.
+func (s *State) FloodDist(start Point, blocked *BitGrid) (int, []int) {
+	g := s.Grid
+	n := g.Width * g.Height
+	dist := make([]int, n)
+	for i := range dist {
+		dist[i] = Unreachable
+	}
+	if g.IsWall(start) || (blocked != nil && blocked.Has(start)) {
+		return 0, dist
+	}
+	dist[start.Y*g.Width+start.X] = 0
+	q := s.DistQ[:0]
+	q = append(q, start)
+	count := 0
+	for i := 0; i < len(q); i++ {
+		p := q[i]
+		count++
+		d := dist[p.Y*g.Width+p.X]
+		for dir := DirUp; dir <= DirLeft; dir++ {
+			np := Add(p, DirDelta[dir])
+			if g.IsWall(np) {
+				continue
+			}
+			ni := np.Y*g.Width + np.X
+			if dist[ni] != Unreachable || (blocked != nil && blocked.Has(np)) {
+				continue
+			}
+			dist[ni] = d + 1
+			q = append(q, np)
+		}
+	}
+	s.DistQ = q[:0]
+	return count, dist
 }
 
 // --- Apple support rebuild --------------------------------------------------

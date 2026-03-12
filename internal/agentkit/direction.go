@@ -47,3 +47,18 @@ func FacingPts(head, neck Point) Direction {
 	}
 	return facingTbl[(dy+1)*3+(dx+1)]
 }
+
+// LegalDirs returns the 3 non-back directions for facing.
+// facing must not be DirNone.
+func LegalDirs(facing Direction) [3]Direction {
+	back := Opp(facing)
+	var out [3]Direction
+	n := 0
+	for d := DirUp; d <= DirLeft; d++ {
+		if d != back {
+			out[n] = d
+			n++
+		}
+	}
+	return out
+}
