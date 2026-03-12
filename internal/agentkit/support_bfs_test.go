@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"codingame/internal/engine/grid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // stateFromSeed builds an agentkit State from engine seed + leagueLevel.
@@ -58,9 +60,7 @@ func stateFromSeed(seed int64, leagueLevel int) (State, []Point, [][]Point) {
 func TestSupPathBFS_Seed2248_AllApples(t *testing.T) {
 	state, apples, spawns := stateFromSeed(2248502322264711400, 1)
 
-	if len(spawns) == 0 {
-		t.Fatal("no spawn islands")
-	}
+	require.NotEmpty(t, spawns, "no spawn islands")
 	body := spawns[0] // bot 0 body
 	head := body[0]
 	initRun := state.Terr.BodyInitRun(body)
@@ -102,9 +102,7 @@ func TestSupPathBFS_Unreachable(t *testing.T) {
 	terrain := sTerrainFromLayout(layout)
 
 	result := terrain.SupPathBFS(Point{X: 0, Y: 0}, 1, Point{X: 4, Y: 0}, nil)
-	if result != nil {
-		t.Fatalf("expected nil for unreachable target, got %+v", result)
-	}
+	assert.Nil(t, result)
 }
 
 func TestSupPathBFS_AdjacentTarget(t *testing.T) {
@@ -115,15 +113,9 @@ func TestSupPathBFS_AdjacentTarget(t *testing.T) {
 	terrain := sTerrainFromLayout(layout)
 
 	result := terrain.SupPathBFS(Point{X: 2, Y: 0}, 1, Point{X: 3, Y: 0}, nil)
-	if result == nil {
-		t.Fatal("expected path, got nil")
-	}
-	if result.MinLen != 1 {
-		t.Fatalf("MinLen = %d, want 1", result.MinLen)
-	}
-	if result.Dist != 0 {
-		t.Fatalf("Dist = %d, want 0 (start is already adjacent)", result.Dist)
-	}
+	require.NotNil(t, result, "expected path, got nil")
+	assert.Equal(t, 1, result.MinLen)
+	assert.Zero(t, result.Dist)
 }
 
 func TestBodyInitRun(t *testing.T) {
@@ -145,9 +137,7 @@ func TestBodyInitRun(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := state.Terr.BodyInitRun(tt.body)
 			t.Logf("body=%+v initRun=%d", tt.body, got)
-			if got < 1 {
-				t.Fatalf("BodyInitRun = %d, expected positive", got)
-			}
+			assert.Positive(t, got)
 		})
 	}
 }

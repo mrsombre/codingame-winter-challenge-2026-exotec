@@ -1,6 +1,11 @@
 package agentkit
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
 func TestSTerrainSeed18UpperAppleNeedsLengthFour(t *testing.T) {
 	terrain := sTerrainFromLayout([]string{
@@ -19,9 +24,7 @@ func TestSTerrainSeed18UpperAppleNeedsLengthFour(t *testing.T) {
 	body := []Point{{X: 2, Y: 1}, {X: 2, Y: 2}, {X: 2, Y: 3}}
 	target := Point{X: 7, Y: 0}
 
-	if got := terrain.MinBodyLen(body, target); got != 4 {
-		t.Fatalf("MinBodyLen() = %d, want 4", got)
-	}
+	assert.Equal(t, 4, terrain.MinBodyLen(body, target))
 }
 
 func TestSTerrainApprNodesPreferLowestSupport(t *testing.T) {
@@ -33,12 +36,8 @@ func TestSTerrainApprNodesPreferLowestSupport(t *testing.T) {
 	})
 
 	got := terrain.ApprNodes(Point{X: 2, Y: 0})
-	if len(got) != 1 {
-		t.Fatalf("len(ApprNodes) = %d, want 1", len(got))
-	}
-	if terrain.Nodes[got[0]].Pos != (Point{X: 2, Y: 0}) {
-		t.Fatalf("approach node = %+v, want {2 0}", terrain.Nodes[got[0]].Pos)
-	}
+	require.Len(t, got, 1)
+	assert.Equal(t, Point{X: 2, Y: 0}, terrain.Nodes[got[0]].Pos)
 }
 
 func TestSTerrainSeed1001CenterBotNeedsLengthFive(t *testing.T) {
@@ -65,9 +64,7 @@ func TestSTerrainSeed1001CenterBotNeedsLengthFive(t *testing.T) {
 	body := []Point{{X: 14, Y: 13}, {X: 14, Y: 14}, {X: 14, Y: 15}}
 	target := Point{X: 11, Y: 6}
 
-	if got := terrain.MinBodyLen(body, target); got != 5 {
-		t.Fatalf("MinBodyLen() = %d, want 5", got)
-	}
+	assert.Equal(t, 5, terrain.MinBodyLen(body, target))
 }
 
 func TestSTerrainSeed1001TopAppleApproaches(t *testing.T) {
@@ -100,18 +97,18 @@ func TestSTerrainSeed1001TopAppleApproaches(t *testing.T) {
 
 	state := stateFromLayout(layout, apples)
 	approaches := TgtAppr(&state, Point{X: 4, Y: 1})
-	if len(approaches) == 0 {
-		t.Fatal("TgtAppr() returned no approaches")
-	}
+	require.NotEmpty(t, approaches, "TgtAppr() returned no approaches")
 
 	assertApproach := func(support Point, minL int) {
 		t.Helper()
+		found := false
 		for _, a := range approaches {
 			if a.Cell == support && a.MinL == minL {
-				return
+				found = true
+				break
 			}
 		}
-		t.Fatalf("missing approach cell=%+v minL=%d in %+v", support, minL, approaches)
+		assert.Truef(t, found, "missing approach cell=%+v minL=%d in %+v", support, minL, approaches)
 	}
 
 	assertApproach(Point{X: 2, Y: 2}, 2)
@@ -152,20 +149,25 @@ func TestSTerrainSeed1001CloseSupFor116(t *testing.T) {
 
 	assertHas := func(support Point, minL int) {
 		t.Helper()
+		found := false
 		for _, a := range got {
 			if a.Cell == support && a.MinL == minL {
-				return
+				found = true
+				break
 			}
 		}
-		t.Fatalf("missing closest cell=%+v minL=%d in %+v", support, minL, got)
+		assert.Truef(t, found, "missing closest cell=%+v minL=%d in %+v", support, minL, got)
 	}
 	assertMissing := func(support Point) {
 		t.Helper()
+		found := false
 		for _, a := range got {
 			if a.Cell == support {
-				t.Fatalf("unexpected duplicate cell=%+v in %+v", support, got)
+				found = true
+				break
 			}
 		}
+		assert.Falsef(t, found, "unexpected duplicate cell=%+v in %+v", support, got)
 	}
 
 	assertHas(Point{X: 10, Y: 8}, 2)
@@ -208,18 +210,19 @@ func TestStateRebuildSupMirrorsSeed1001(t *testing.T) {
 
 	left := state.AppleSup[Point{X: 4, Y: 1}]
 	right := state.AppleSup[Point{X: 27, Y: 1}]
-	if len(left) == 0 || len(right) == 0 {
-		t.Fatalf("expected mirrored apple supports, got left=%+v right=%+v", left, right)
-	}
+	require.NotEmpty(t, left, "expected mirrored apple supports, got left=%+v right=%+v", left, right)
+	require.NotEmpty(t, right, "expected mirrored apple supports, got left=%+v right=%+v", left, right)
 
 	assertHas := func(approaches []TAppr, support Point, minL int) {
 		t.Helper()
+		found := false
 		for _, a := range approaches {
 			if a.Cell == support && a.MinL == minL {
-				return
+				found = true
+				break
 			}
 		}
-		t.Fatalf("missing cell=%+v minL=%d in %+v", support, minL, approaches)
+		assert.Truef(t, found, "missing cell=%+v minL=%d in %+v", support, minL, approaches)
 	}
 
 	assertHas(left, Point{X: 2, Y: 2}, 2)
@@ -260,20 +263,25 @@ func TestStateRebuildSupFor206UsesLocalSupports(t *testing.T) {
 
 	assertHas := func(support Point, minL int) {
 		t.Helper()
+		found := false
 		for _, a := range got {
 			if a.Cell == support && a.MinL == minL {
-				return
+				found = true
+				break
 			}
 		}
-		t.Fatalf("missing cell=%+v minL=%d in %+v", support, minL, got)
+		assert.Truef(t, found, "missing cell=%+v minL=%d in %+v", support, minL, got)
 	}
 	assertMissing := func(support Point) {
 		t.Helper()
+		found := false
 		for _, a := range got {
 			if a.Cell == support {
-				t.Fatalf("unexpected cell=%+v in %+v", support, got)
+				found = true
+				break
 			}
 		}
+		assert.Falsef(t, found, "unexpected cell=%+v in %+v", support, got)
 	}
 
 	assertHas(Point{X: 21, Y: 8}, 2)

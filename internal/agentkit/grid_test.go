@@ -1,14 +1,16 @@
 package agentkit
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 // --- Point ------------------------------------------------------------------
 
 func TestMDist(t *testing.T) {
 	got := MDist(Point{X: 1, Y: 2}, Point{X: 4, Y: -3})
-	if got != 8 {
-		t.Fatalf("MDist() = %d, want 8", got)
-	}
+	assert.Equal(t, 8, got)
 }
 
 // --- BitGrid ----------------------------------------------------------------
@@ -17,25 +19,17 @@ func TestBitGrid(t *testing.T) {
 	grid := NewBG(5, 4)
 	p := Point{X: 2, Y: 3}
 
-	if grid.Has(p) {
-		t.Fatalf("new grid should be empty")
-	}
+	assert.False(t, grid.Has(p), "new grid should be empty")
 
 	grid.Set(p)
-	if !grid.Has(p) {
-		t.Fatalf("Set() did not mark point")
-	}
+	assert.True(t, grid.Has(p), "Set() did not mark point")
 
 	grid.Clear(p)
-	if grid.Has(p) {
-		t.Fatalf("Clear() did not remove point")
-	}
+	assert.False(t, grid.Has(p), "Clear() did not remove point")
 
 	grid.Set(Point{X: 0, Y: 0})
 	grid.Reset()
-	if grid.Has(Point{X: 0, Y: 0}) {
-		t.Fatalf("Reset() did not clear bits")
-	}
+	assert.False(t, grid.Has(Point{X: 0, Y: 0}), "Reset() did not clear bits")
 }
 
 func BenchmarkBitGridHas(b *testing.B) {
@@ -100,12 +94,8 @@ func TestAGridWBelow(t *testing.T) {
 		{X: 1, Y: 3}: true,
 	})
 
-	if !grid.WBelow(Point{X: 1, Y: 2}) {
-		t.Fatalf("WBelow() = false, want true")
-	}
-	if grid.WBelow(Point{X: 0, Y: 1}) {
-		t.Fatalf("WBelow() = true, want false")
-	}
+	assert.True(t, grid.WBelow(Point{X: 1, Y: 2}))
+	assert.False(t, grid.WBelow(Point{X: 0, Y: 1}))
 }
 
 func TestAppleDist(t *testing.T) {
@@ -125,14 +115,10 @@ func TestAppleDist(t *testing.T) {
 		{X: 1, Y: 1}: 3,
 	}
 	for p, want := range tests {
-		if got := field.At(p); got != want {
-			t.Fatalf("distance at %+v = %d, want %d", p, got, want)
-		}
+		assert.Equalf(t, want, field.At(p), "distance at %+v", p)
 	}
 
-	if got := field.At(Point{X: 2, Y: 1}); got != Unreachable {
-		t.Fatalf("wall distance = %d, want %d", got, Unreachable)
-	}
+	assert.Equal(t, Unreachable, field.At(Point{X: 2, Y: 1}))
 }
 
 func TestFlood(t *testing.T) {
@@ -144,12 +130,8 @@ func TestFlood(t *testing.T) {
 	occ.Set(Point{X: 0, Y: 0})
 	occ.Set(Point{X: 3, Y: 0})
 
-	if got := grid.Flood(Point{X: 0, Y: 0}, &occ, 100); got != 17 {
-		t.Fatalf("Flood() = %d, want 17", got)
-	}
-	if got := grid.Flood(Point{X: 0, Y: 0}, &occ, 5); got != 5 {
-		t.Fatalf("Flood() with cap = %d, want 5", got)
-	}
+	assert.Equal(t, 17, grid.Flood(Point{X: 0, Y: 0}, &occ, 100))
+	assert.Equal(t, 5, grid.Flood(Point{X: 0, Y: 0}, &occ, 5))
 }
 
 // --- State ------------------------------------------------------------------
@@ -164,14 +146,7 @@ func TestStateVMoves(t *testing.T) {
 
 	moves := state.VMoves(Point{X: 1, Y: 2}, DirUp)
 	want := []Direction{DirLeft}
-	if len(moves) != len(want) {
-		t.Fatalf("len(moves) = %d, want %d", len(moves), len(want))
-	}
-	for i := range want {
-		if moves[i] != want[i] {
-			t.Fatalf("moves[%d] = %v, want %v", i, moves[i], want[i])
-		}
-	}
+	assert.Equal(t, want, moves)
 }
 
 func TestStateAppleDist(t *testing.T) {
@@ -184,12 +159,8 @@ func TestStateAppleDist(t *testing.T) {
 
 	field := state.AppleDist()
 
-	if got := field.At(Point{X: 4, Y: 0}); got != 0 {
-		t.Fatalf("distance at apple = %d, want 0", got)
-	}
-	if got := field.At(Point{X: 3, Y: 0}); got != 1 {
-		t.Fatalf("distance at neighbor = %d, want 1", got)
-	}
+	assert.Zero(t, field.At(Point{X: 4, Y: 0}))
+	assert.Equal(t, 1, field.At(Point{X: 3, Y: 0}))
 }
 
 // --- Benchmarks -------------------------------------------------------------

@@ -3,6 +3,9 @@ package engine
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestProbeClimbTrapFallsBack(t *testing.T) {
@@ -20,18 +23,10 @@ func TestProbeClimbTrapFallsBack(t *testing.T) {
 	}
 
 	alive, got, applesLeft := simulateProbeTurn(layout, start, nil, DirNorth)
-	if !alive {
-		t.Fatalf("bird died, expected trap to fall back alive")
-	}
-	if applesLeft != 0 {
-		t.Fatalf("applesLeft = %d, want 0", applesLeft)
-	}
-	if !sameCoords(got, start) {
-		t.Fatalf("body after UP = %s, want %s", coordsString(got), coordsString(start))
-	}
-	if !hasSupport(layout, got, nil) {
-		t.Fatalf("alive body must end supported: %s", coordsString(got))
-	}
+	require.True(t, alive, "bird died, expected trap to fall back alive")
+	assert.Zero(t, applesLeft)
+	assert.True(t, sameCoords(got, start), "body after UP = %s, want %s", coordsString(got), coordsString(start))
+	assert.True(t, hasSupport(layout, got, nil), "alive body must end supported: %s", coordsString(got))
 }
 
 func TestProbeClimbTrapWithApple(t *testing.T) {
@@ -51,8 +46,8 @@ func TestProbeClimbTrapWithApple(t *testing.T) {
 
 	alive, got, applesLeft := simulateProbeTurn(layout, start, apples, DirNorth)
 	t.Logf("apple lure result: alive=%v body=%s apples_left=%d", alive, coordsString(got), applesLeft)
-	if alive && !hasSupport(layout, got, nil) {
-		t.Fatalf("alive body must end supported: %s", coordsString(got))
+	if alive {
+		assert.True(t, hasSupport(layout, got, nil), "alive body must end supported: %s", coordsString(got))
 	}
 }
 
@@ -71,9 +66,7 @@ func TestProbeStepHeightThreeNeedsLengthFourToStepRight(t *testing.T) {
 		{X: 0, Y: 3},
 	}
 	alive, got, _ := simulateProbeTurn(layout, short, nil, DirEast)
-	if alive {
-		t.Fatalf("length-3 bird should die stepping right into a 3-high wall, got %s", coordsString(got))
-	}
+	assert.False(t, alive, "length-3 bird should die stepping right into a 3-high wall, got %s", coordsString(got))
 
 	long := []Coord{
 		{X: 0, Y: 0},
@@ -82,18 +75,14 @@ func TestProbeStepHeightThreeNeedsLengthFourToStepRight(t *testing.T) {
 		{X: 0, Y: 3},
 	}
 	alive, got, _ = simulateProbeTurn(layout, long, nil, DirEast)
-	if !alive {
-		t.Fatalf("length-4 bird should survive stepping right over a 3-high wall")
-	}
+	require.True(t, alive, "length-4 bird should survive stepping right over a 3-high wall")
 	want := []Coord{
 		{X: 1, Y: 0},
 		{X: 0, Y: 0},
 		{X: 0, Y: 1},
 		{X: 0, Y: 2},
 	}
-	if !sameCoords(got, want) {
-		t.Fatalf("body after length-4 RIGHT = %s, want %s", coordsString(got), coordsString(want))
-	}
+	assert.True(t, sameCoords(got, want), "body after length-4 RIGHT = %s, want %s", coordsString(got), coordsString(want))
 }
 
 func simulateProbeTurn(layout []string, body []Coord, apples []Coord, dir Direction) (bool, []Coord, int) {

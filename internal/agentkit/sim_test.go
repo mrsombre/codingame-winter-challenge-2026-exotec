@@ -3,6 +3,9 @@ package agentkit
 import (
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mkTestGrid builds a grid from ASCII rows ('.' = open, '#' = wall).
@@ -31,12 +34,8 @@ func TestFillBG(t *testing.T) {
 	bg := NewBG(5, 5)
 	bg.Set(Point{X: 0, Y: 0})
 	FillBG(&bg, []Point{{X: 1, Y: 1}, {X: 2, Y: 2}})
-	if bg.Has(Point{X: 0, Y: 0}) {
-		t.Fatal("FillBG should reset before filling")
-	}
-	if !bg.Has(Point{X: 1, Y: 1}) || !bg.Has(Point{X: 2, Y: 2}) {
-		t.Fatal("FillBG did not set expected points")
-	}
+	assert.False(t, bg.Has(Point{X: 0, Y: 0}), "FillBG should reset before filling")
+	assert.True(t, bg.Has(Point{X: 1, Y: 1}) && bg.Has(Point{X: 2, Y: 2}), "FillBG did not set expected points")
 }
 
 // --- OccExcept --------------------------------------------------------------
@@ -48,35 +47,23 @@ func TestOccExcept(t *testing.T) {
 	base.Set(Point{X: 3, Y: 3})
 
 	got := OccExcept(&base, []Point{{X: 2, Y: 2}})
-	if !got.Has(Point{X: 1, Y: 1}) {
-		t.Fatal("OccExcept should keep non-body cells")
-	}
-	if got.Has(Point{X: 2, Y: 2}) {
-		t.Fatal("OccExcept should clear body cell")
-	}
-	if !got.Has(Point{X: 3, Y: 3}) {
-		t.Fatal("OccExcept should keep non-body cells")
-	}
+	assert.True(t, got.Has(Point{X: 1, Y: 1}), "OccExcept should keep non-body cells")
+	assert.False(t, got.Has(Point{X: 2, Y: 2}), "OccExcept should clear body cell")
+	assert.True(t, got.Has(Point{X: 3, Y: 3}), "OccExcept should keep non-body cells")
 }
 
 // --- LegalDirs --------------------------------------------------------------
 
 func TestLegalDirs(t *testing.T) {
 	dirs := LegalDirs(DirUp)
-	if len(dirs) != 3 {
-		t.Fatalf("LegalDirs len = %d, want 3", len(dirs))
-	}
+	assert.Len(t, dirs, 3)
 	for _, d := range dirs {
-		if d == DirDown {
-			t.Fatal("LegalDirs(DirUp) must not include DirDown")
-		}
+		assert.NotEqual(t, DirDown, d, "LegalDirs(DirUp) must not include DirDown")
 	}
 
 	dirs = LegalDirs(DirLeft)
 	for _, d := range dirs {
-		if d == DirRight {
-			t.Fatal("LegalDirs(DirLeft) must not include DirRight")
-		}
+		assert.NotEqual(t, DirRight, d, "LegalDirs(DirLeft) must not include DirRight")
 	}
 }
 
@@ -90,21 +77,11 @@ func TestFloodDist(t *testing.T) {
 	occ.Set(Point{X: 1, Y: 0})
 
 	count, dist := s.FloodDist(Point{X: 0, Y: 0}, &occ)
-	if count == 0 {
-		t.Fatal("expected non-zero flood count")
-	}
-	if dist[0*5+0] != 0 {
-		t.Fatalf("start distance = %d, want 0", dist[0*5+0])
-	}
-	if dist[0*5+1] != Unreachable {
-		t.Fatalf("occupied cell distance = %d, want Unreachable", dist[0*5+1])
-	}
-	if dist[1*5+2] != Unreachable {
-		t.Fatalf("wall distance = %d, want Unreachable", dist[1*5+2])
-	}
-	if dist[1*5+0] != 1 {
-		t.Fatalf("(0,1) distance = %d, want 1", dist[1*5+0])
-	}
+	assert.NotZero(t, count, "expected non-zero flood count")
+	assert.Zero(t, dist[0*5+0])
+	assert.Equal(t, Unreachable, dist[0*5+1])
+	assert.Equal(t, Unreachable, dist[1*5+2])
+	assert.Equal(t, 1, dist[1*5+0])
 }
 
 func TestFloodDistBlockedStart(t *testing.T) {
@@ -114,13 +91,9 @@ func TestFloodDistBlockedStart(t *testing.T) {
 	occ.Set(Point{X: 2, Y: 2})
 
 	count, dist := s.FloodDist(Point{X: 2, Y: 2}, &occ)
-	if count != 0 {
-		t.Fatalf("blocked start should return 0 count, got %d", count)
-	}
+	assert.Zero(t, count, "blocked start should return 0 count")
 	for _, d := range dist {
-		if d != Unreachable {
-			t.Fatal("all distances should be Unreachable when start is blocked")
-		}
+		assert.Equal(t, Unreachable, d, "all distances should be Unreachable when start is blocked")
 	}
 }
 
@@ -130,18 +103,14 @@ func TestHasSupportGrounded(t *testing.T) {
 	// Wall at (2,3) → (2,2) has wall below → WBelow.
 	g := NewAG(5, 4, map[Point]bool{{X: 2, Y: 3}: true})
 	body := []Point{{X: 2, Y: 2}, {X: 2, Y: 1}}
-	if !HasSupport(g, body, nil, nil, nil) {
-		t.Fatal("body over wall should be supported")
-	}
+	assert.True(t, HasSupport(g, body, nil, nil, nil), "body over wall should be supported")
 }
 
 func TestHasSupportFloating(t *testing.T) {
 	g := NewAG(5, 5, nil)
 	// Both parts in mid-air (no wall below, no occupied below).
 	body := []Point{{X: 2, Y: 0}, {X: 2, Y: 1}}
-	if HasSupport(g, body, nil, nil, nil) {
-		t.Fatal("floating body should not be supported")
-	}
+	assert.False(t, HasSupport(g, body, nil, nil, nil), "floating body should not be supported")
 }
 
 func TestHasSupportByOccupied(t *testing.T) {
@@ -149,9 +118,7 @@ func TestHasSupportByOccupied(t *testing.T) {
 	body := []Point{{X: 2, Y: 0}}
 	occ := NewBG(5, 5)
 	occ.Set(Point{X: 2, Y: 1}) // cell below is occupied
-	if !HasSupport(g, body, nil, &occ, nil) {
-		t.Fatal("body with occupied cell below should be supported")
-	}
+	assert.True(t, HasSupport(g, body, nil, &occ, nil), "body with occupied cell below should be supported")
 }
 
 func TestHasSupportBySource(t *testing.T) {
@@ -159,9 +126,7 @@ func TestHasSupportBySource(t *testing.T) {
 	body := []Point{{X: 2, Y: 0}}
 	src := NewBG(5, 5)
 	src.Set(Point{X: 2, Y: 1}) // source below
-	if !HasSupport(g, body, &src, nil, nil) {
-		t.Fatal("body with source below should be supported")
-	}
+	assert.True(t, HasSupport(g, body, &src, nil, nil), "body with source below should be supported")
 }
 
 func TestHasSupportEatenSourceIgnored(t *testing.T) {
@@ -170,9 +135,7 @@ func TestHasSupportEatenSourceIgnored(t *testing.T) {
 	src := NewBG(5, 5)
 	src.Set(Point{X: 2, Y: 1})
 	eaten := Point{X: 2, Y: 1}
-	if HasSupport(g, body, &src, nil, &eaten) {
-		t.Fatal("eaten source should not provide support")
-	}
+	assert.False(t, HasSupport(g, body, &src, nil, &eaten), "eaten source should not provide support")
 }
 
 // --- SimMove ----------------------------------------------------------------
@@ -190,18 +153,11 @@ func TestSimMoveStraight(t *testing.T) {
 	body := []Point{{X: 2, Y: 4}, {X: 2, Y: 3}}
 
 	nb, _, alive, didEat, _ := s.SimMove(body, DirUp, DirRight, nil, nil)
-	if !alive {
-		t.Fatal("SimMove should survive")
-	}
-	if didEat {
-		t.Fatal("SimMove should not eat without sources")
-	}
-	if nb[0] != (Point{X: 3, Y: 4}) {
-		t.Fatalf("new head = %+v, want {3 4}", nb[0])
-	}
-	if len(nb) != 2 {
-		t.Fatalf("body len = %d, want 2", len(nb))
-	}
+	require.True(t, alive, "SimMove should survive")
+	assert.False(t, didEat, "SimMove should not eat without sources")
+	require.NotEmpty(t, nb)
+	assert.Equal(t, Point{X: 3, Y: 4}, nb[0])
+	assert.Len(t, nb, 2)
 }
 
 func TestSimMoveEat(t *testing.T) {
@@ -218,18 +174,11 @@ func TestSimMoveEat(t *testing.T) {
 	srcBG.Set(Point{X: 3, Y: 4}) // apple to the right
 
 	nb, _, alive, didEat, _ := s.SimMove(body, DirUp, DirRight, &srcBG, nil)
-	if !alive {
-		t.Fatal("should survive eating")
-	}
-	if !didEat {
-		t.Fatal("should have eaten")
-	}
-	if len(nb) != 3 {
-		t.Fatalf("body after eat = %d, want 3", len(nb))
-	}
-	if nb[0] != (Point{X: 3, Y: 4}) {
-		t.Fatalf("new head = %+v, want {3 4}", nb[0])
-	}
+	require.True(t, alive, "should survive eating")
+	assert.True(t, didEat, "should have eaten")
+	require.NotEmpty(t, nb)
+	assert.Len(t, nb, 3)
+	assert.Equal(t, Point{X: 3, Y: 4}, nb[0])
 }
 
 func TestSimMoveWallDeath(t *testing.T) {
@@ -245,9 +194,7 @@ func TestSimMoveWallDeath(t *testing.T) {
 	// Body at (1,4),(1,3),(1,2) — 3 parts, try to move into own body → collision → n≤3 → dead.
 	body := []Point{{X: 1, Y: 4}, {X: 1, Y: 3}, {X: 1, Y: 2}}
 	_, _, alive, _, _ := s.SimMove(body, DirUp, DirUp, nil, nil)
-	if alive {
-		t.Fatal("collision with own body (body≤3) should die")
-	}
+	assert.False(t, alive, "collision with own body (body≤3) should die")
 }
 
 // --- SrcScore ---------------------------------------------------------------
@@ -258,15 +205,11 @@ func TestSrcScore(t *testing.T) {
 
 	// Same row, 1 step right — no up-penalty, no WBelow bonus (middle of grid).
 	got := SrcScore(g, head, Point{X: 3, Y: 2})
-	if got != 1 {
-		t.Fatalf("SrcScore = %d, want 1", got)
-	}
+	assert.Equal(t, 1, got)
 
 	// Target above: MDist=2, up penalty = head.Y-target.Y = 2 → total 4.
 	got = SrcScore(g, head, Point{X: 2, Y: 0})
-	if got != 4 {
-		t.Fatalf("SrcScore upward = %d, want 4", got)
-	}
+	assert.Equal(t, 4, got)
 }
 
 // --- StateHash --------------------------------------------------------------
@@ -275,17 +218,11 @@ func TestStateHash(t *testing.T) {
 	body := []Point{{X: 1, Y: 2}, {X: 1, Y: 3}}
 	h1 := StateHash(DirUp, body)
 	h2 := StateHash(DirUp, body)
-	if h1 != h2 {
-		t.Fatal("StateHash should be deterministic")
-	}
+	assert.Equal(t, h1, h2, "StateHash should be deterministic")
 	h3 := StateHash(DirDown, body)
-	if h1 == h3 {
-		t.Fatal("different facing should produce different hash")
-	}
+	assert.NotEqual(t, h1, h3, "different facing should produce different hash")
 	h4 := StateHash(DirUp, []Point{{X: 1, Y: 3}, {X: 1, Y: 2}})
-	if h1 == h4 {
-		t.Fatal("different body order should produce different hash")
-	}
+	assert.NotEqual(t, h1, h4, "different body order should produce different hash")
 }
 
 // --- FiltSrc ----------------------------------------------------------------
@@ -310,9 +247,8 @@ func TestFiltSrc(t *testing.T) {
 	enemyDists[0*W+3] = 4
 
 	got := s.FiltSrc(sources, myDists, enemyDists)
-	if len(got) != 1 || got[0] != (Point{X: 3, Y: 0}) {
-		t.Fatalf("FiltSrc = %+v, want [{3 0}]", got)
-	}
+	require.Len(t, got, 1)
+	assert.Equal(t, Point{X: 3, Y: 0}, got[0])
 }
 
 func TestFiltSrcFallback(t *testing.T) {
@@ -331,9 +267,8 @@ func TestFiltSrcFallback(t *testing.T) {
 	enemyDists[0*W+1] = 2
 
 	got := s.FiltSrc(sources, myDists, enemyDists)
-	if len(got) != 1 || got[0] != sources[0] {
-		t.Fatalf("FiltSrc fallback = %+v, want %+v", got, sources)
-	}
+	require.Len(t, got, 1)
+	assert.Equal(t, sources[0], got[0])
 }
 
 // --- IsSafeDir / BestSafeDir ------------------------------------------------
@@ -345,15 +280,9 @@ func TestIsSafeDir(t *testing.T) {
 		DirLeft:  {Alive: false, Flood: 0},
 	}
 	bodyLen := 5 // thresh = 10
-	if !IsSafeDir(DirUp, dirInfo, bodyLen) {
-		t.Fatal("DirUp (flood 20) should be safe")
-	}
-	if IsSafeDir(DirRight, dirInfo, bodyLen) {
-		t.Fatal("DirRight (flood 3 < 10) should be unsafe")
-	}
-	if IsSafeDir(DirLeft, dirInfo, bodyLen) {
-		t.Fatal("DirLeft (not alive) should be unsafe")
-	}
+	assert.True(t, IsSafeDir(DirUp, dirInfo, bodyLen), "DirUp (flood 20) should be safe")
+	assert.False(t, IsSafeDir(DirRight, dirInfo, bodyLen), "DirRight (flood 3 < 10) should be unsafe")
+	assert.False(t, IsSafeDir(DirLeft, dirInfo, bodyLen), "DirLeft (not alive) should be unsafe")
 }
 
 func TestBestSafeDir(t *testing.T) {
@@ -363,9 +292,8 @@ func TestBestSafeDir(t *testing.T) {
 		DirLeft:  {Alive: false, Flood: 0},
 	}
 	dir, ok := BestSafeDir(dirInfo)
-	if !ok || dir != DirRight {
-		t.Fatalf("BestSafeDir = %v, %v, want DirRight true", dir, ok)
-	}
+	require.True(t, ok)
+	assert.Equal(t, DirRight, dir)
 }
 
 func TestBestSafeDirNone(t *testing.T) {
@@ -373,9 +301,7 @@ func TestBestSafeDirNone(t *testing.T) {
 		DirUp: {Alive: false},
 	}
 	_, ok := BestSafeDir(dirInfo)
-	if ok {
-		t.Fatal("BestSafeDir with no alive dirs should return false")
-	}
+	assert.False(t, ok, "BestSafeDir with no alive dirs should return false")
 }
 
 // --- CalcDirInfo ------------------------------------------------------------
@@ -397,17 +323,11 @@ func TestCalcDirInfo(t *testing.T) {
 	}
 
 	info := s.CalcDirInfo(body, DirUp, &occ)
-	if len(info) == 0 {
-		t.Fatal("CalcDirInfo should return at least one direction")
-	}
+	require.NotEmpty(t, info, "CalcDirInfo should return at least one direction")
 	for _, di := range info {
 		if di.Alive {
-			if di.Flood <= 0 {
-				t.Fatal("alive direction should have positive flood count")
-			}
-			if di.Dists == nil {
-				t.Fatal("alive direction should have distances")
-			}
+			assert.Positive(t, di.Flood, "alive direction should have positive flood count")
+			assert.NotNil(t, di.Dists, "alive direction should have distances")
 		}
 	}
 }
@@ -431,15 +351,9 @@ func TestInstantEat(t *testing.T) {
 	occ := NewBG(5, 5)
 
 	res := s.InstantEat(body, DirUp, sources, &srcBG, &occ)
-	if !res.Ok {
-		t.Fatal("InstantEat should find adjacent apple")
-	}
-	if res.Dir != DirRight {
-		t.Fatalf("InstantEat dir = %v, want DirRight", res.Dir)
-	}
-	if res.Steps != 1 {
-		t.Fatalf("InstantEat steps = %d, want 1", res.Steps)
-	}
+	require.True(t, res.Ok, "InstantEat should find adjacent apple")
+	assert.Equal(t, DirRight, res.Dir)
+	assert.Equal(t, 1, res.Steps)
 }
 
 func TestInstantEatNone(t *testing.T) {
@@ -459,9 +373,7 @@ func TestInstantEatNone(t *testing.T) {
 	occ := NewBG(5, 5)
 
 	res := s.InstantEat(body, DirUp, sources, &srcBG, &occ)
-	if res.Ok {
-		t.Fatal("InstantEat should not find non-adjacent apple")
-	}
+	assert.False(t, res.Ok, "InstantEat should not find non-adjacent apple")
 }
 
 // --- PathBFS ----------------------------------------------------------------
@@ -491,12 +403,8 @@ func TestPathBFS(t *testing.T) {
 
 	deadline := time.Now().Add(100 * time.Millisecond)
 	res := s.PathBFS(body, facing, sources, 10, dirInfo, enemyDists, &srcBG, &occ, deadline)
-	if !res.Ok {
-		t.Fatal("PathBFS should find the apple")
-	}
-	if res.Target != sources[0] {
-		t.Fatalf("PathBFS target = %+v, want %+v", res.Target, sources[0])
-	}
+	require.True(t, res.Ok, "PathBFS should find the apple")
+	assert.Equal(t, sources[0], res.Target)
 }
 
 // --- BestAction -------------------------------------------------------------
@@ -527,12 +435,8 @@ func TestBestActionPicksClosestSource(t *testing.T) {
 	}
 
 	res := s.BestAction(body, facing, sources, dirInfo, nil, enemyDists, &srcBG, &occ, &danger)
-	if !res.Ok {
-		t.Fatal("BestAction should return Ok")
-	}
-	if res.Dir != DirRight {
-		t.Fatalf("BestAction dir = %v, want DirRight (closer to source)", res.Dir)
-	}
+	require.True(t, res.Ok, "BestAction should return Ok")
+	assert.Equal(t, DirRight, res.Dir)
 }
 
 func TestBestActionNoSources(t *testing.T) {
@@ -555,12 +459,8 @@ func TestBestActionNoSources(t *testing.T) {
 	}
 
 	res := s.BestAction(body, DirUp, nil, dirInfo, nil, enemyDists, &srcBG, &occ, &danger)
-	if !res.Ok {
-		t.Fatal("BestAction with no sources should still return Ok")
-	}
-	if res.Dir != DirUp {
-		t.Fatalf("BestAction no-sources dir = %v, want DirUp (default)", res.Dir)
-	}
+	require.True(t, res.Ok, "BestAction with no sources should still return Ok")
+	assert.Equal(t, DirUp, res.Dir)
 }
 
 func TestBestActionDangerPenalty(t *testing.T) {
@@ -591,14 +491,10 @@ func TestBestActionDangerPenalty(t *testing.T) {
 	}
 
 	res := s.BestAction(body, facing, sources, dirInfo, nil, enemyDists, &srcBG, &occ, &danger)
-	if !res.Ok {
-		t.Fatal("BestAction should return Ok even with danger")
-	}
+	require.True(t, res.Ok, "BestAction should return Ok even with danger")
 	// With body len 2 (>3) the danger pen is 20 — mild, so right might still win.
 	// We only check it returns a valid direction.
-	if res.Dir == DirNone {
-		t.Fatal("BestAction should not return DirNone")
-	}
+	assert.NotEqual(t, DirNone, res.Dir, "BestAction should not return DirNone")
 }
 
 // --- CalcEnemyDist ----------------------------------------------------------
@@ -622,11 +518,7 @@ func TestCalcEnemyDist(t *testing.T) {
 
 	result := s.CalcEnemyDist(enemies, &allOcc)
 	// (0,4) is enemy head → dist 0
-	if result[4*5+0] != 0 {
-		t.Fatalf("enemy head distance = %d, want 0", result[4*5+0])
-	}
+	assert.Zero(t, result[4*5+0])
 	// (1,4) is one step from enemy → dist 1
-	if result[4*5+1] != 1 {
-		t.Fatalf("adjacent to enemy = %d, want 1", result[4*5+1])
-	}
+	assert.Equal(t, 1, result[4*5+1])
 }

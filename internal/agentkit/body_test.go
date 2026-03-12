@@ -1,6 +1,11 @@
 package agentkit
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
 func TestBodySetAndSlice(t *testing.T) {
 	body := NewBody([]Point{
@@ -9,9 +14,7 @@ func TestBodySetAndSlice(t *testing.T) {
 		{X: 3, Y: 3},
 	})
 
-	if body.Len != 3 {
-		t.Fatalf("Len = %d, want 3", body.Len)
-	}
+	assert.Equal(t, 3, body.Len)
 
 	got := body.Slice()
 	want := []Point{
@@ -19,11 +22,7 @@ func TestBodySetAndSlice(t *testing.T) {
 		{X: 3, Y: 2},
 		{X: 3, Y: 3},
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("Slice()[%d] = %+v, want %+v", i, got[i], want[i])
-		}
-	}
+	assert.Equal(t, want, got)
 }
 
 func TestBodyHeadTailFacingContains(t *testing.T) {
@@ -34,25 +33,17 @@ func TestBodyHeadTailFacingContains(t *testing.T) {
 	})
 
 	head, ok := body.Head()
-	if !ok || head != (Point{X: 5, Y: 4}) {
-		t.Fatalf("Head() = %+v, %v", head, ok)
-	}
+	require.True(t, ok)
+	assert.Equal(t, Point{X: 5, Y: 4}, head)
 
 	tail, ok := body.Tail()
-	if !ok || tail != (Point{X: 5, Y: 6}) {
-		t.Fatalf("Tail() = %+v, %v", tail, ok)
-	}
+	require.True(t, ok)
+	assert.Equal(t, Point{X: 5, Y: 6}, tail)
 
-	if got := body.Facing(); got != DirUp {
-		t.Fatalf("Facing() = %v, want %v", got, DirUp)
-	}
+	assert.Equal(t, DirUp, body.Facing())
 
-	if !body.Contains(Point{X: 5, Y: 5}) {
-		t.Fatalf("Contains() = false, want true")
-	}
-	if body.Contains(Point{X: 6, Y: 5}) {
-		t.Fatalf("Contains() = true, want false")
-	}
+	assert.True(t, body.Contains(Point{X: 5, Y: 5}))
+	assert.False(t, body.Contains(Point{X: 6, Y: 5}))
 }
 
 func TestBodyCopyAndReset(t *testing.T) {
@@ -64,26 +55,15 @@ func TestBodyCopyAndReset(t *testing.T) {
 	var dst Body
 	dst.Copy(src)
 
-	if dst.Len != src.Len {
-		t.Fatalf("Len = %d, want %d", dst.Len, src.Len)
-	}
-	if dst.Slice()[1] != src.Slice()[1] {
-		t.Fatalf("copied body mismatch")
-	}
+	assert.Equal(t, src.Len, dst.Len)
+	assert.Equal(t, src.Slice()[1], dst.Slice()[1])
 
 	src.Parts[0] = Point{X: 9, Y: 9}
-	if dst.Slice()[0] == src.Slice()[0] {
-		t.Fatalf("Copy() should copy values, not alias source")
-	}
+	assert.NotEqual(t, src.Slice()[0], dst.Slice()[0], "Copy() should copy values, not alias source")
 
 	dst.Reset()
-	if dst.Len != 0 {
-		t.Fatalf("Len after Reset() = %d, want 0", dst.Len)
-	}
-	if _, ok := dst.Head(); ok {
-		t.Fatalf("Head() on empty body should be missing")
-	}
-	if got := dst.Facing(); got != DirNone {
-		t.Fatalf("Facing() on empty body = %v, want %v", got, DirNone)
-	}
+	assert.Zero(t, dst.Len)
+	_, ok := dst.Head()
+	assert.False(t, ok, "Head() on empty body should be missing")
+	assert.Equal(t, DirNone, dst.Facing())
 }

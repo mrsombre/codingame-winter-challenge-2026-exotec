@@ -5,73 +5,100 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 const (
-	testArenaSeed = int64(1001)
+	testArenaPositiveSeed = int64(468706172918629800)
+	testArenaNegativeSeed = int64(-468706172918629800)
 )
 
-// javaExpectedInitialInput is the expected output as produced by the Java referee.
-// When CG's seed derivation is understood, TestGridMakerInitialInput should
-// be updated to reproduce this exactly.
-var testArenaExpectedInitialInput = strings.Join([]string{
+var testArenaExpectedInitialInputNegative = strings.Join([]string{
 	"0",
-	"32",
-	"17",
-	".#............................#.",
-	".#............................#.",
-	"..#..........................#..",
-	"...........#........#...........",
-	"...........##......##...........",
-	"................................",
-	".##....#................#....##.",
-	".......#......#..#......#.......",
-	".........##....##....##.........",
-	"#......##..............##......#",
-	".##.........##....##.........##.",
-	"........##..#......#..##........",
-	".#.....####.#......#.####.....#.",
-	".#....####..#..##..#..####....#.",
-	".#..######..#..##..#..######..#.",
-	"#############..##..#############",
-	"################################",
-	"4",
+	"20",
+	"11",
+	"....................",
+	"....................",
+	"....................",
+	"....................",
+	"....................",
+	"....................",
+	"....................",
+	"....................",
+	"....................",
+	"....#..#....#..#....",
+	"####################",
+	"3",
 	"0",
 	"1",
 	"2",
 	"3",
 	"4",
 	"5",
-	"6",
-	"7",
 	"18",
-	"4 1",
-	"27 1",
-	"1 3",
-	"30 3",
-	"2 7",
-	"29 7",
-	"3 7",
-	"28 7",
-	"8 1",
-	"23 1",
-	"5 5",
-	"26 5",
 	"11 6",
-	"20 6",
+	"8 6",
+	"11 0",
+	"8 0",
+	"16 1",
+	"3 1",
+	"12 6",
+	"7 6",
+	"4 3",
+	"15 3",
+	"6 6",
+	"13 6",
+	"0 7",
+	"19 7",
+	"8 7",
+	"11 7",
 	"2 8",
-	"29 8",
-	"3 12",
-	"28 12",
-	"8",
-	"0 18,7:18,8:18,9",
-	"1 7,3:7,4:7,5",
-	"2 14,13:14,14:14,15",
-	"3 21,9:21,10:21,11",
+	"17 8",
+	"6",
+	"0 4,6:4,7:4,8",
+	"1 6,7:6,8:6,9",
+	"2 18,7:18,8:18,9",
+	"3 15,6:15,7:15,8",
 	"4 13,7:13,8:13,9",
-	"5 24,3:24,4:24,5",
-	"6 17,13:17,14:17,15",
-	"7 10,9:10,10:10,11",
+	"5 1,7:1,8:1,9",
+}, "\n")
+
+var testArenaExpectedInitialInputPositive = strings.Join([]string{
+	"0",
+	"18",
+	"10",
+	"..................",
+	"........##........",
+	"..................",
+	"..................",
+	"..................",
+	"..................",
+	"..................",
+	"..#............#..",
+	".##.....##.....##.",
+	"##################",
+	"2",
+	"0",
+	"1",
+	"2",
+	"3",
+	"10",
+	"16 0",
+	"1 0",
+	"6 0",
+	"11 0",
+	"2 0",
+	"15 0",
+	"7 3",
+	"10 3",
+	"4 6",
+	"13 6",
+	"4",
+	"0 10,6:10,7:10,8",
+	"1 3,6:3,7:3,8",
+	"2 7,6:7,7:7,8",
+	"3 14,6:14,7:14,8",
 }, "\n")
 
 func buildInitialInput(seed int64, leagueLevel int) string {
@@ -133,16 +160,17 @@ func buildInitialInput(seed int64, leagueLevel int) string {
 
 // TestGridMakerSeedDeterminism verifies the GridMaker is deterministic for a given seed.
 func TestGridMakerSeedDeterminism(t *testing.T) {
-	a := buildInitialInput(testArenaSeed, 1)
-	b := buildInitialInput(testArenaSeed, 1)
-	if a != b {
-		t.Error("GridMaker is not deterministic for the same seed")
-	}
+	a := buildInitialInput(testArenaPositiveSeed, 1)
+	b := buildInitialInput(testArenaPositiveSeed, 1)
+	assert.Equal(t, a, b, "GridMaker should be deterministic for the same seed")
 }
 
-func TestGridMakerArenaParity(t *testing.T) {
-	got := buildInitialInput(testArenaSeed, 1)
-	if got != testArenaExpectedInitialInput {
-		t.Fatalf("arena parity mismatch for seed=%d\n\n--- got ---\n%s\n\n--- want ---\n%s", testArenaSeed, got, testArenaExpectedInitialInput)
-	}
+func TestGridMakerNegativeParityCheck(t *testing.T) {
+	got := buildInitialInput(testArenaNegativeSeed, 1)
+	assert.Equalf(t, testArenaExpectedInitialInputNegative, got, "arena parity mismatch for seed=%d", testArenaNegativeSeed)
+}
+
+func TestGridMakerPositiveParityCheck(t *testing.T) {
+	got := buildInitialInput(testArenaPositiveSeed, 1)
+	assert.Equalf(t, testArenaExpectedInitialInputPositive, got, "arena parity mismatch for seed=%d", testArenaPositiveSeed)
 }

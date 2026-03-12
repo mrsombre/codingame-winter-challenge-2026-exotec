@@ -44,6 +44,14 @@ func (g *Game) Init(players []*Player) {
 					c = g.Grid.Opposite(c)
 				}
 				bird.Body = append(bird.Body, c)
+				if len(bird.Body) == 1 {
+					left := c.AddXY(-1, 0)
+					right := c.AddXY(1, 0)
+					if g.Grid.Get(left).Type == TileWall && g.Grid.Get(right).Type == TileWall {
+						g.Grid.Get(left).Clear()
+						g.Grid.Get(g.Grid.Opposite(left)).Clear()
+					}
+				}
 			}
 		}
 	}
@@ -240,144 +248,92 @@ func (g *Game) somethingSolidUnder(c Coord, ignoreBody []Coord) bool {
 	return false
 }
 
+func (g *Game) hasTileOrAppleUnder(c Coord) bool {
+	below := c.Add(Coord{0, 1})
+	if g.Grid.Get(below).Type == TileWall {
+		return true
+	}
+	return g.Grid.HasApple(below)
+}
+
+func (g *Game) isGrounded(c Coord, frozenBirds map[*Bird]bool) bool {
+	under := c.Add(Coord{0, 1})
+	if g.hasTileOrAppleUnder(c) {
+		return true
+	}
+	for bird := range frozenBirds {
+		if bird.BodyContains(under) {
+			return true
+		}
+	}
+	return false
+}
+
 // doFalls applies gravity to all birds.
 func (g *Game) doFalls() {
 	somethingFell := true
 	fallDistances := make(map[int]int)
 	var outOfBounds []*Bird
+	airborneBirds := make(map[*Bird]bool)
+	for _, bird := range g.LiveBirds() {
+		airborneBirds[bird] = true
+	}
+	groundedBirds := make(map[*Bird]bool)
 
 	for somethingFell {
-		for somethingFell {
-			somethingFell = false
-			allBirds := g.LiveBirds()
+		somethingFell = false
+		somethingGotGrounded := true
 
-			for _, bird := range allBirds {
-				canFall := true
+		for somethingGotGrounded {
+			somethingGotGrounded = false
+			var newlyGrounded []*Bird
+			for bird := range airborneBirds {
+				isGrounded := false
 				for _, c := range bird.Body {
-					if g.somethingSolidUnder(c, bird.Body) {
-						canFall = false
+					if g.isGrounded(c, groundedBirds) {
+						isGrounded = true
 						break
 					}
 				}
-				if canFall {
-					somethingFell = true
-					newBody := make([]Coord, len(bird.Body))
-					for i, c := range bird.Body {
-						newBody[i] = c.Add(Coord{0, 1})
-					}
-					bird.Body = newBody
-					fallDistances[bird.ID]++
-
-					// Check out of bounds
-					allOut := true
-					for _, part := range bird.Body {
-						if part.Y < g.Grid.Height+1 {
-							allOut = false
-							break
-						}
-					}
-					if allOut {
-						bird.Alive = false
-						outOfBounds = append(outOfBounds, bird)
-					}
+				if isGrounded {
+					newlyGrounded = append(newlyGrounded, bird)
+				}
+			}
+			if len(newlyGrounded) > 0 {
+				somethingGotGrounded = true
+				for _, bird := range newlyGrounded {
+					groundedBirds[bird] = true
+					delete(airborneBirds, bird)
 				}
 			}
 		}
-		// Handle intercoiled birds
-		fell := g.doIntercoiledFalls(fallDistances, &outOfBounds)
-		somethingFell = fell
-	}
-}
 
-func (g *Game) doIntercoiledFalls(fallDistances map[int]int, outOfBounds *[]*Bird) bool {
-	somethingFellAtSomePoint := false
-
-	somethingFell := true
-	for somethingFell {
-		somethingFell = false
-		intercoiledGroups := g.getIntercoiledBirds()
-
-		for _, birds := range intercoiledGroups {
-			// Build meta body
-			var metaBody []Coord
-			for _, b := range birds {
-				metaBody = append(metaBody, b.Body...)
+		for bird := range airborneBirds {
+			somethingFell = true
+			newBody := make([]Coord, len(bird.Body))
+			for i, c := range bird.Body {
+				newBody[i] = c.Add(Coord{0, 1})
 			}
+			bird.Body = newBody
+			fallDistances[bird.ID]++
 
-			canFall := true
-			for _, c := range metaBody {
-				if g.somethingSolidUnder(c, metaBody) {
-					canFall = false
+			allOut := true
+			for _, part := range bird.Body {
+				if part.Y < g.Grid.Height+1 {
+					allOut = false
 					break
 				}
 			}
-
-			if canFall {
-				somethingFell = true
-				somethingFellAtSomePoint = true
-				for _, bird := range birds {
-					newBody := make([]Coord, len(bird.Body))
-					for i, c := range bird.Body {
-						newBody[i] = c.Add(Coord{0, 1})
-					}
-					bird.Body = newBody
-					fallDistances[bird.ID]++
-
-					if bird.HeadPos().Y >= g.Grid.Height {
-						bird.Alive = false
-						*outOfBounds = append(*outOfBounds, bird)
-					}
-				}
+			if allOut {
+				bird.Alive = false
+				outOfBounds = append(outOfBounds, bird)
 			}
+		}
+
+		for _, bird := range outOfBounds {
+			delete(airborneBirds, bird)
 		}
 	}
-	return somethingFellAtSomePoint
-}
-
-func (g *Game) getIntercoiledBirds() [][]*Bird {
-	var groups [][]*Bird
-	allBirds := g.LiveBirds()
-	visited := make(map[int]bool)
-
-	for _, bird := range allBirds {
-		if visited[bird.ID] {
-			continue
-		}
-		var group []*Bird
-		toVisit := []*Bird{bird}
-		for len(toVisit) > 0 {
-			current := toVisit[0]
-			toVisit = toVisit[1:]
-			if visited[current.ID] {
-				continue
-			}
-			visited[current.ID] = true
-			group = append(group, current)
-			for _, other := range allBirds {
-				if current == other || visited[other.ID] {
-					continue
-				}
-				if birdsAreTouching(current, other) {
-					toVisit = append(toVisit, other)
-				}
-			}
-		}
-		if len(group) > 1 {
-			groups = append(groups, group)
-		}
-	}
-	return groups
-}
-
-func birdsAreTouching(a, b *Bird) bool {
-	for _, c1 := range a.Body {
-		for _, c2 := range b.Body {
-			if c1.ManhattanTo(c2) == 1 {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // OnEnd computes final scores.

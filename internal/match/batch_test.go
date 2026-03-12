@@ -1,12 +1,14 @@
 package match
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestDeriveSeedKeepsBaseSeedForOffsetZero(t *testing.T) {
 	base := int64(-1755827269105404700)
-	if got := deriveSeed(base, 0, nil); got != base {
-		t.Fatalf("deriveSeed(%d, 0, nil) = %d, want %d", base, got, base)
-	}
+	assert.Equal(t, base, deriveSeed(base, 0, nil))
 }
 
 func TestDeriveSeedUsesSignedIncrementSequence(t *testing.T) {
@@ -23,9 +25,7 @@ func TestDeriveSeedUsesSignedIncrementSequence(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		if got := deriveSeed(base, tc.offset, &increment); got != tc.want {
-			t.Fatalf("deriveSeed(%d, %d, %d) = %d, want %d", base, tc.offset, increment, got, tc.want)
-		}
+		assert.Equalf(t, tc.want, deriveSeed(base, tc.offset, &increment), "deriveSeed(%d, %d, %d)", base, tc.offset, increment)
 	}
 }
 
@@ -33,10 +33,6 @@ func TestMixSeedIsDeterministicForSignedBase(t *testing.T) {
 	base := int64(-1755827269105404700)
 	gotA := mixSeed(base, 3)
 	gotB := mixSeed(base, 3)
-	if gotA != gotB {
-		t.Fatalf("mixSeed returned different values for same input: %d vs %d", gotA, gotB)
-	}
-	if gotA == base {
-		t.Fatalf("mixSeed(%d, 3) = %d, want value different from base", base, gotA)
-	}
+	assert.Equal(t, gotA, gotB)
+	assert.NotEqual(t, base, gotA)
 }

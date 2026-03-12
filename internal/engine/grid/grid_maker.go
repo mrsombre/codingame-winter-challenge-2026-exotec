@@ -166,6 +166,31 @@ func (gm *GridMaker) Make() *Grid {
 		}
 	}
 
+	// Match the upstream fallback for maps that would otherwise spawn too few apples.
+	if len(grid.Apples) < 8 {
+		grid.Apples = grid.Apples[:0]
+		freeTiles := make([]Coord, 0)
+		for _, c := range grid.Coords() {
+			if grid.Get(c).Type == TileEmpty {
+				freeTiles = append(freeTiles, c)
+			}
+		}
+		gm.shuffleCoords(freeTiles)
+
+		minAppleCoords := 4
+		if n := int(0.025 * float64(len(freeTiles))); n > minAppleCoords {
+			minAppleCoords = n
+		}
+		for len(grid.Apples) < minAppleCoords*2 && len(freeTiles) > 0 {
+			c := freeTiles[0]
+			freeTiles = freeTiles[1:]
+			opp := grid.Opposite(c)
+			grid.Apples = append(grid.Apples, c)
+			grid.Apples = append(grid.Apples, opp)
+			freeTiles = removeCoord(freeTiles, opp)
+		}
+	}
+
 	// Convert lone walls to apples
 	for _, c := range grid.Coords() {
 		if grid.Get(c).Type == TileEmpty {
@@ -265,6 +290,15 @@ func (gm *GridMaker) shuffleCoords(coords []Coord) {
 
 func (gm *GridMaker) randomIntRange(min, max int) int {
 	return min + gm.random.Intn(max-min)
+}
+
+func removeCoord(coords []Coord, target Coord) []Coord {
+	for i, c := range coords {
+		if c == target {
+			return append(coords[:i], coords[i+1:]...)
+		}
+	}
+	return coords
 }
 
 func coordInSlice(c Coord, slice []Coord) bool {

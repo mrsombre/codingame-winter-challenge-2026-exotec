@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // Known values from java.util.Random(0):
@@ -15,22 +17,16 @@ import (
 func TestJavaRandomKnownValues(t *testing.T) {
 	r := NewJavaRandom(0)
 	gotInt := int32(r.next(32))
-	if gotInt != -1155484576 {
-		t.Errorf("nextInt() got %d, want -1155484576", gotInt)
-	}
+	assert.EqualValues(t, -1155484576, gotInt)
 
 	r2 := NewJavaRandom(0)
 	gotDouble := r2.Float64()
 	want := 0.730967787376657
-	if gotDouble != want {
-		t.Errorf("nextDouble() got %.15f, want %.15f", gotDouble, want)
-	}
+	assert.Equal(t, want, gotDouble)
 
 	r3 := NewJavaRandom(0)
 	gotBounded := r3.Intn(10)
-	if gotBounded != 0 {
-		t.Errorf("nextInt(10) got %d, want 0", gotBounded)
-	}
+	assert.Zero(t, gotBounded)
 }
 
 // nextLong matches java.util.Random.nextLong().
@@ -49,8 +45,8 @@ func TestJavaRandomDebugSequence(t *testing.T) {
 		for i := 0; i < advance; i++ {
 			r.next(32)
 		}
-		f1 := r.Float64() // height factor
-		f2 := r.Float64() // b factor
+		f1 := r.Float64()                             // height factor
+		f2 := r.Float64()                             // b factor
 		h := 10 + int(math.Round(math.Pow(f1, 2)*14)) // bronze skew
 		b := 5 + f2*10
 		t.Logf("advance=%d: height_factor=%.6f height=%d b_factor=%.6f b=%.2f",

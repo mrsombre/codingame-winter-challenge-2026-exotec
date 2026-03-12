@@ -123,8 +123,15 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 	defer cleanup()
 
 	for _, player := range players {
-		for _, line := range referee.GlobalInfoFor(player) {
+		lines := referee.GlobalInfoFor(player)
+		for _, line := range lines {
 			player.SendInputLine(line)
+		}
+		if runner.Options.Debug {
+			fmt.Fprintf(os.Stderr, "--- p%d global input ---\n", player.GetIndex())
+			for _, line := range lines {
+				fmt.Fprintln(os.Stderr, line)
+			}
 		}
 	}
 
@@ -140,8 +147,15 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 			if player.IsDeactivated() || referee.ShouldSkipPlayerTurn(player) {
 				continue
 			}
-			for _, line := range referee.FrameInfoFor(player) {
+			lines := referee.FrameInfoFor(player)
+			for _, line := range lines {
 				player.SendInputLine(line)
+			}
+			if runner.Options.Debug {
+				fmt.Fprintf(os.Stderr, "--- turn %d p%d input ---\n", turn, player.GetIndex())
+				for _, line := range lines {
+					fmt.Fprintln(os.Stderr, line)
+				}
 			}
 			_ = player.Execute()
 			if runner.Options.Debug {
