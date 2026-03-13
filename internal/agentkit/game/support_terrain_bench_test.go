@@ -1,4 +1,4 @@
-package agentkit
+package game
 
 import "testing"
 
@@ -110,17 +110,17 @@ func BenchmarkApprNodes_ColdCache(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		t := NewSTerrain(grid)
-		t.ApprNodes(target)
+		TerrApprNodes(t, target)
 	}
 }
 
 func BenchmarkApprNodes_WarmCache(b *testing.B) {
 	terrain := sTerrainFromLayout(seed1001Layout)
 	target := Point{X: 11, Y: 6}
-	terrain.ApprNodes(target) // warm
+	TerrApprNodes(terrain, target) // warm
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.ApprNodes(target)
+		TerrApprNodes(terrain, target)
 	}
 }
 
@@ -156,7 +156,7 @@ func BenchmarkTAppr_TopApple(b *testing.B) {
 	target := Point{X: 4, Y: 1}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.TAppr(&state.Apples, target)
+		TerrTAppr(terrain, &state.Apples, target)
 	}
 }
 
@@ -166,7 +166,7 @@ func BenchmarkTAppr_MidApple(b *testing.B) {
 	target := Point{X: 11, Y: 6}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.TAppr(&state.Apples, target)
+		TerrTAppr(terrain, &state.Apples, target)
 	}
 }
 
@@ -176,7 +176,7 @@ func BenchmarkTAppr_BottomApple(b *testing.B) {
 	target := Point{X: 3, Y: 12}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.TAppr(&state.Apples, target)
+		TerrTAppr(terrain, &state.Apples, target)
 	}
 }
 
@@ -188,7 +188,7 @@ func BenchmarkClosest_TopApple(b *testing.B) {
 	target := Point{X: 4, Y: 1}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.Closest(&state.Apples, target)
+		TerrClosest(terrain, &state.Apples, target)
 	}
 }
 
@@ -198,30 +198,7 @@ func BenchmarkClosest_MidApple(b *testing.B) {
 	target := Point{X: 11, Y: 6}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		terrain.Closest(&state.Apples, target)
-	}
-}
-
-// --- RebuildSup (full per-turn cost) ----------------------------------------
-
-func BenchmarkRebuildSup_Seed1001(b *testing.B) {
-	state := stateFromLayout(seed1001Layout, seed1001Apples)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		state.RebuildSup()
-	}
-}
-
-func BenchmarkRebuildSup_Seed18(b *testing.B) {
-	apples := []Point{
-		{X: 7, Y: 0}, {X: 10, Y: 0},
-		{X: 2, Y: 4}, {X: 15, Y: 4},
-		{X: 5, Y: 5}, {X: 12, Y: 5},
-	}
-	state := stateFromLayout(seed18Layout, apples)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		state.RebuildSup()
+		TerrClosest(terrain, &state.Apples, target)
 	}
 }
 

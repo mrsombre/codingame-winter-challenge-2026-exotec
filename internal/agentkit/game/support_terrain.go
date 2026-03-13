@@ -1,4 +1,4 @@
-package agentkit
+package game
 
 import "sort"
 
@@ -110,7 +110,7 @@ func (b *SBBuf) Reset() {
 	}
 }
 
-func (b *SBBuf) Mark(key int)    { b.Visited[key] = b.Gen }
+func (b *SBBuf) Mark(key int)      { b.Visited[key] = b.Gen }
 func (b *SBBuf) Seen(key int) bool { return b.Visited[key] == b.Gen }
 
 func (b *SBBuf) SetPrev(key int, prev int32) {
@@ -322,8 +322,8 @@ func (t *STerrain) AnchorComp(body []Point) int {
 	return -1
 }
 
-// ApprNodes returns support node IDs near target. Cached; do not mutate result.
-func (t *STerrain) ApprNodes(target Point) []int {
+// TerrApprNodes returns support node IDs near target. Cached; do not mutate result.
+func TerrApprNodes(t *STerrain, target Point) []int {
 	if cached, ok := t.AprCache[target]; ok {
 		return cached
 	}
@@ -461,7 +461,7 @@ func (t *STerrain) MinImmLen(supCell, target Point, apples *BitGrid) (int, int) 
 	return Unreachable, Unreachable
 }
 
-func (t *STerrain) TAppr(apples *BitGrid, target Point) []TAppr {
+func TerrTAppr(t *STerrain, apples *BitGrid, target Point) []TAppr {
 	if t.Grid.IsWall(target) {
 		return nil
 	}
@@ -510,8 +510,8 @@ func (t *STerrain) TAppr(apples *BitGrid, target Point) []TAppr {
 	return appr
 }
 
-func (t *STerrain) Closest(apples *BitGrid, target Point) []TAppr {
-	appr := t.TAppr(apples, target)
+func TerrClosest(t *STerrain, apples *BitGrid, target Point) []TAppr {
+	appr := TerrTAppr(t, apples, target)
 	if len(appr) == 0 {
 		return nil
 	}
@@ -601,12 +601,12 @@ func TgtAppr(state *State, target Point) []TAppr {
 	if state == nil || state.Grid == nil || state.Terr == nil {
 		return nil
 	}
-	return state.Terr.TAppr(&state.Apples, target)
+	return TerrTAppr(state.Terr, &state.Apples, target)
 }
 
 func CloseSup(state *State, target Point) []TAppr {
 	if state == nil || state.Grid == nil || state.Terr == nil {
 		return nil
 	}
-	return state.Terr.Closest(&state.Apples, target)
+	return TerrClosest(state.Terr, &state.Apples, target)
 }

@@ -1,10 +1,11 @@
-package agentkit
+package experiment
 
 import (
 	"strings"
 	"testing"
 
 	enginegrid "codingame/internal/engine/grid"
+	"codingame/internal/agentkit/game"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,30 +29,30 @@ const graphSeedLayout = `............................
 const graphSeed = int64(-6499872768487446000)
 
 func TestGraphNodesUsePassableSideEdgesAndApples(t *testing.T) {
-	graph := graphFromLayout(t, graphSeedRows(), []Point{
+	graph := graphFromLayout(t, graphSeedRows(), []game.Point{
 		{X: 11, Y: 6},
 		{X: 13, Y: 6},
 	})
 
-	requireGraphNodeType(t, graph, Point{X: 3, Y: 9}, GraphNodeTypeEdge)
-	requireGraphNodeType(t, graph, Point{X: 24, Y: 9}, GraphNodeTypeEdge)
-	requireGraphNodeType(t, graph, Point{X: 11, Y: 6}, GraphNodeTypeApple)
-	requireGraphNodeType(t, graph, Point{X: 13, Y: 6}, GraphNodeTypeApple)
-	assert.Nil(t, graph.NodeAt(Point{X: 12, Y: 6}), "interior non-apple floor should not be a node")
-	assert.Nil(t, graph.NodeAt(Point{X: 20, Y: 9}), "open area without support edge below should not be a node")
+	requireGraphNodeType(t, graph, game.Point{X: 3, Y: 9}, GraphNodeTypeEdge)
+	requireGraphNodeType(t, graph, game.Point{X: 24, Y: 9}, GraphNodeTypeEdge)
+	requireGraphNodeType(t, graph, game.Point{X: 11, Y: 6}, GraphNodeTypeApple)
+	requireGraphNodeType(t, graph, game.Point{X: 13, Y: 6}, GraphNodeTypeApple)
+	assert.Nil(t, graph.NodeAt(game.Point{X: 12, Y: 6}), "interior non-apple floor should not be a node")
+	assert.Nil(t, graph.NodeAt(game.Point{X: 20, Y: 9}), "open area without support edge below should not be a node")
 }
 
 func TestGraphBuildsStraightArcsBetweenNodes(t *testing.T) {
-	graph := graphFromLayout(t, graphSeedRows(), []Point{
+	graph := graphFromLayout(t, graphSeedRows(), []game.Point{
 		{X: 11, Y: 6},
 		{X: 13, Y: 6},
 	})
 
-	requireGraphArc(t, graph, Point{X: 24, Y: 9}, DirLeft, Point{X: 23, Y: 9}, 1)
-	requireGraphArc(t, graph, Point{X: 23, Y: 9}, DirRight, Point{X: 24, Y: 9}, 1)
-	requireGraphArc(t, graph, Point{X: 3, Y: 9}, DirRight, Point{X: 4, Y: 9}, 1)
-	requireGraphArc(t, graph, Point{X: 11, Y: 6}, DirRight, Point{X: 13, Y: 6}, 2)
-	requireGraphArc(t, graph, Point{X: 13, Y: 6}, DirLeft, Point{X: 11, Y: 6}, 2)
+	requireGraphArc(t, graph, game.Point{X: 24, Y: 9}, game.DirLeft, game.Point{X: 23, Y: 9}, 1)
+	requireGraphArc(t, graph, game.Point{X: 23, Y: 9}, game.DirRight, game.Point{X: 24, Y: 9}, 1)
+	requireGraphArc(t, graph, game.Point{X: 3, Y: 9}, game.DirRight, game.Point{X: 4, Y: 9}, 1)
+	requireGraphArc(t, graph, game.Point{X: 11, Y: 6}, game.DirRight, game.Point{X: 13, Y: 6}, 2)
+	requireGraphArc(t, graph, game.Point{X: 13, Y: 6}, game.DirLeft, game.Point{X: 11, Y: 6}, 2)
 }
 
 func TestGraphPrecalcHigherClimbs(t *testing.T) {
@@ -62,19 +63,19 @@ func TestGraphPrecalcHigherClimbs(t *testing.T) {
 		"#####",
 	}
 
-	grid, graph := graphAndGridFromLayout(t, layout, []Point{
+	grid, graph := graphAndGridFromLayout(t, layout, []game.Point{
 		{X: 1, Y: 2},
 		{X: 1, Y: 1},
 		{X: 1, Y: 0},
 	})
 	graph.PrecalcHigherClimbs(grid, nil, 1)
 
-	midID := mustGraphNode(t, graph, Point{X: 1, Y: 1})
-	topID := mustGraphNode(t, graph, Point{X: 1, Y: 0})
-	lowID := mustGraphNode(t, graph, Point{X: 1, Y: 2})
+	midID := mustGraphNode(t, graph, game.Point{X: 1, Y: 1})
+	topID := mustGraphNode(t, graph, game.Point{X: 1, Y: 0})
+	lowID := mustGraphNode(t, graph, game.Point{X: 1, Y: 2})
 
-	requireGraphClimb(t, graph, midID, Point{X: 1, Y: 2}, 2, 1)
-	requireGraphClimb(t, graph, topID, Point{X: 1, Y: 1}, 2, 1)
+	requireGraphClimb(t, graph, midID, game.Point{X: 1, Y: 2}, 2, 1)
+	requireGraphClimb(t, graph, topID, game.Point{X: 1, Y: 1}, 2, 1)
 	assert.Empty(t, graph.Nodes[lowID].ClimbIn, "lowest node should not need incoming climbs from below")
 }
 
@@ -82,26 +83,26 @@ func graphSeedRows() []string {
 	return strings.Split(graphSeedLayout, "\n")
 }
 
-func graphFromLayout(t *testing.T, layout []string, apples []Point) *Graph {
+func graphFromLayout(t *testing.T, layout []string, apples []game.Point) *Graph {
 	t.Helper()
 	_, graph := graphAndGridFromLayout(t, layout, apples)
 	return graph
 }
 
-func graphAndGridFromLayout(t *testing.T, layout []string, apples []Point) (*AGrid, *Graph) {
+func graphAndGridFromLayout(t *testing.T, layout []string, apples []game.Point) (*game.AGrid, *Graph) {
 	t.Helper()
 
-	walls := make(map[Point]bool)
+	walls := make(map[game.Point]bool)
 	for y, row := range layout {
 		for x, ch := range row {
 			if ch == '#' {
-				walls[Point{X: x, Y: y}] = true
+				walls[game.Point{X: x, Y: y}] = true
 			}
 		}
 	}
 
-	grid := NewAG(len(layout[0]), len(layout), walls)
-	appleGrid := NewBG(grid.Width, grid.Height)
+	grid := game.NewAG(len(layout[0]), len(layout), walls)
+	appleGrid := game.NewBG(grid.Width, grid.Height)
 	for _, apple := range apples {
 		require.Falsef(t, grid.IsWall(apple), "apple must be on a passable cell: %+v", apple)
 		appleGrid.Set(apple)
@@ -110,14 +111,14 @@ func graphAndGridFromLayout(t *testing.T, layout []string, apples []Point) (*AGr
 	return grid, NewGraph(grid, &appleGrid)
 }
 
-func requireGraphNodeType(t *testing.T, graph *Graph, pos Point, want GraphNodeType) {
+func requireGraphNodeType(t *testing.T, graph *Graph, pos game.Point, want GraphNodeType) {
 	t.Helper()
 	node := graph.NodeAt(pos)
 	require.NotNilf(t, node, "expected node at %+v", pos)
 	assert.Equal(t, want, node.Type)
 }
 
-func requireGraphArc(t *testing.T, graph *Graph, from Point, dir Direction, to Point, dist int) {
+func requireGraphArc(t *testing.T, graph *Graph, from game.Point, dir game.Direction, to game.Point, dist int) {
 	t.Helper()
 	node := graph.NodeAt(from)
 	require.NotNilf(t, node, "expected node at %+v", from)
@@ -134,7 +135,7 @@ func requireGraphArc(t *testing.T, graph *Graph, from Point, dir Direction, to P
 	require.Failf(t, "missing arc", "from=%+v dir=%v to=%+v dist=%d arcs=%+v", from, dir, to, dist, node.Arcs)
 }
 
-func requireGraphClimb(t *testing.T, graph *Graph, toID int, from Point, minLen, dist int) {
+func requireGraphClimb(t *testing.T, graph *Graph, toID int, from game.Point, minLen, dist int) {
 	t.Helper()
 
 	fromID := graph.NodeIDAt(from)
@@ -150,7 +151,7 @@ func requireGraphClimb(t *testing.T, graph *Graph, toID int, from Point, minLen,
 		graph.Nodes[toID].Pos, from, minLen, dist, graph.Nodes[toID].ClimbIn)
 }
 
-func mustGraphNode(t *testing.T, graph *Graph, pos Point) int {
+func mustGraphNode(t *testing.T, graph *Graph, pos game.Point) int {
 	t.Helper()
 	id := graph.NodeIDAt(pos)
 	require.NotEqualf(t, -1, id, "expected node at %+v", pos)

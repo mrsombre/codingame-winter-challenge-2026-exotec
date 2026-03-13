@@ -14,6 +14,7 @@ internal/
 
 ## Project Rules
 
+- NEVER read `bundle.go` files — they are auto-generated single-file bundles for arena submission; read `cmd/main.go` in the same agent directory instead
 - Codingame provides `golang 1.18.1`
 - Arena bots live in `agent/<name>/main.go`
 - Local matches should use external bot binaries; do not reintroduce in-process agent fallbacks

@@ -1,6 +1,10 @@
-package agentkit
+package experiment
 
-import "sort"
+import (
+	"sort"
+
+	"codingame/internal/agentkit/game"
+)
 
 type GraphNodeType uint8
 
@@ -21,19 +25,19 @@ func (t GraphNodeType) HasApple() bool {
 
 type GraphArc struct {
 	To   int
-	Dir  Direction
+	Dir  game.Direction
 	Dist int
 }
 
 type GraphClimb struct {
 	From   int
-	Dir    Direction
+	Dir    game.Direction
 	Dist   int
 	MinLen int
 }
 
 type GraphNode struct {
-	Pos     Point
+	Pos     game.Point
 	Type    GraphNodeType
 	Arcs    []GraphArc
 	ClimbIn []GraphClimb
@@ -46,7 +50,7 @@ type Graph struct {
 	Nodes   []GraphNode
 }
 
-func NewGraph(grid *AGrid, apples *BitGrid) *Graph {
+func NewGraph(grid *game.AGrid, apples *game.BitGrid) *Graph {
 	if grid == nil {
 		return &Graph{}
 	}
@@ -62,7 +66,7 @@ func NewGraph(grid *AGrid, apples *BitGrid) *Graph {
 
 	for y := 0; y < grid.Height; y++ {
 		for x := 0; x < grid.Width; x++ {
-			p := Point{X: x, Y: y}
+			p := game.Point{X: x, Y: y}
 			if grid.IsWall(p) {
 				continue
 			}
@@ -83,8 +87,8 @@ func NewGraph(grid *AGrid, apples *BitGrid) *Graph {
 
 	for id := range g.Nodes {
 		from := g.Nodes[id].Pos
-		for dir := DirUp; dir <= DirLeft; dir++ {
-			next := Add(from, DirDelta[dir])
+		for dir := game.DirUp; dir <= game.DirLeft; dir++ {
+			next := game.Add(from, game.DirDelta[dir])
 			if grid.IsWall(next) {
 				continue
 			}
@@ -101,7 +105,7 @@ func NewGraph(grid *AGrid, apples *BitGrid) *Graph {
 					}
 					break
 				}
-				next = Add(next, DirDelta[dir])
+				next = game.Add(next, game.DirDelta[dir])
 				dist++
 			}
 		}
@@ -110,14 +114,14 @@ func NewGraph(grid *AGrid, apples *BitGrid) *Graph {
 	return g
 }
 
-func (g *Graph) NodeIDAt(p Point) int {
+func (g *Graph) NodeIDAt(p game.Point) int {
 	if g == nil || p.X < 0 || p.X >= g.Width || p.Y < 0 || p.Y >= g.Height {
 		return -1
 	}
 	return g.NodeIDs[p.Y*g.Width+p.X]
 }
 
-func (g *Graph) NodeAt(p Point) *GraphNode {
+func (g *Graph) NodeAt(p game.Point) *GraphNode {
 	id := g.NodeIDAt(p)
 	if id == -1 {
 		return nil
@@ -125,11 +129,8 @@ func (g *Graph) NodeAt(p Point) *GraphNode {
 	return &g.Nodes[id]
 }
 
-// PrecalcHigherClimbs stores direct incoming climb costs for higher-ground
-// nodes. It only considers immediate graph neighbors with a smaller Y target;
-// downhill/flat movement is left to ordinary BFS + falling logic.
-// startRun is the initial unsupported run at the source node.
-func (g *Graph) PrecalcHigherClimbs(grid *AGrid, apples *BitGrid, startRun int) {
+// PrecalcHigherClimbs stores direct incoming climb costs for higher-ground nodes.
+func (g *Graph) PrecalcHigherClimbs(grid *game.AGrid, apples *game.BitGrid, startRun int) {
 	if g == nil || grid == nil {
 		return
 	}
@@ -149,7 +150,7 @@ func (g *Graph) PrecalcHigherClimbs(grid *AGrid, apples *BitGrid, startRun int) 
 			}
 
 			minLen := g.arcMinLen(grid, apples, fromID, arc, startRun)
-			if minLen == Unreachable {
+			if minLen == game.Unreachable {
 				continue
 			}
 
@@ -177,23 +178,23 @@ func (g *Graph) PrecalcHigherClimbs(grid *AGrid, apples *BitGrid, startRun int) 
 	}
 }
 
-func (g *Graph) isPassableEdge(grid *AGrid, p Point) bool {
-	below := Point{X: p.X, Y: p.Y + 1}
+func (g *Graph) isPassableEdge(grid *game.AGrid, p game.Point) bool {
+	below := game.Point{X: p.X, Y: p.Y + 1}
 	if !grid.IsWall(below) {
 		return false
 	}
 
-	leftBelow := Point{X: below.X - 1, Y: below.Y}
-	rightBelow := Point{X: below.X + 1, Y: below.Y}
+	leftBelow := game.Point{X: below.X - 1, Y: below.Y}
+	rightBelow := game.Point{X: below.X + 1, Y: below.Y}
 	return !grid.IsWall(leftBelow) || !grid.IsWall(rightBelow)
 }
 
-func (g *Graph) arcMinLen(grid *AGrid, apples *BitGrid, fromID int, arc GraphArc, startRun int) int {
+func (g *Graph) arcMinLen(grid *game.AGrid, apples *game.BitGrid, fromID int, arc GraphArc, startRun int) int {
 	if g == nil || grid == nil || fromID < 0 || fromID >= len(g.Nodes) {
-		return Unreachable
+		return game.Unreachable
 	}
 	if arc.To < 0 || arc.To >= len(g.Nodes) || startRun < 1 {
-		return Unreachable
+		return game.Unreachable
 	}
 
 	run := startRun
@@ -201,9 +202,9 @@ func (g *Graph) arcMinLen(grid *AGrid, apples *BitGrid, fromID int, arc GraphArc
 	cur := g.Nodes[fromID].Pos
 
 	for step := 1; step <= arc.Dist; step++ {
-		cur = Add(cur, DirDelta[arc.Dir])
+		cur = game.Add(cur, game.DirDelta[arc.Dir])
 		if grid.IsWall(cur) {
-			return Unreachable
+			return game.Unreachable
 		}
 
 		run++
@@ -216,20 +217,20 @@ func (g *Graph) arcMinLen(grid *AGrid, apples *BitGrid, fromID int, arc GraphArc
 	}
 
 	if cur != g.Nodes[arc.To].Pos {
-		return Unreachable
+		return game.Unreachable
 	}
 
 	return maxRun
 }
 
-func graphHasSupport(grid *AGrid, apples *BitGrid, p Point) bool {
+func graphHasSupport(grid *game.AGrid, apples *game.BitGrid, p game.Point) bool {
 	if grid.WBelow(p) {
 		return true
 	}
 	if apples == nil {
 		return false
 	}
-	return apples.Has(Point{X: p.X, Y: p.Y + 1})
+	return apples.Has(game.Point{X: p.X, Y: p.Y + 1})
 }
 
 func graphNodeType(isEdge, isApple bool) GraphNodeType {

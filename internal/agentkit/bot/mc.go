@@ -1,6 +1,10 @@
-package agentkit
+package bot
 
-import "time"
+import (
+	"time"
+
+	"codingame/internal/agentkit/game"
+)
 
 // ---------------------------------------------------------------------------
 // Fixed-size bitgrid for zero-alloc rollout simulation
@@ -10,7 +14,7 @@ const RollMaxCells = 44 * 24
 
 type RollBG [RollMaxCells/64 + 1]uint64
 
-func rbHas(g *RollBG, p Point, w, h int) bool {
+func rbHas(g *RollBG, p game.Point, w, h int) bool {
 	if p.X < 0 || p.X >= w || p.Y < 0 || p.Y >= h {
 		return false
 	}
@@ -18,7 +22,7 @@ func rbHas(g *RollBG, p Point, w, h int) bool {
 	return g[i/64]&(1<<uint(i%64)) != 0
 }
 
-func rbSet(g *RollBG, p Point, w, h int) {
+func rbSet(g *RollBG, p game.Point, w, h int) {
 	if p.X < 0 || p.X >= w || p.Y < 0 || p.Y >= h {
 		return
 	}
@@ -26,7 +30,7 @@ func rbSet(g *RollBG, p Point, w, h int) {
 	g[i/64] |= 1 << uint(i%64)
 }
 
-func rbClear(g *RollBG, p Point, w, h int) {
+func rbClear(g *RollBG, p game.Point, w, h int) {
 	if p.X < 0 || p.X >= w || p.Y < 0 || p.Y >= h {
 		return
 	}
@@ -34,7 +38,7 @@ func rbClear(g *RollBG, p Point, w, h int) {
 	g[i/64] &^= 1 << uint(i%64)
 }
 
-func rbFill(g *RollBG, pts []Point, w, h int) {
+func rbFill(g *RollBG, pts []game.Point, w, h int) {
 	*g = RollBG{}
 	for _, p := range pts {
 		rbSet(g, p, w, h)
@@ -47,7 +51,7 @@ func rbFill(g *RollBG, pts []Point, w, h int) {
 
 var rollAppleDist [24][44]int
 
-func PrecomputeRollAppleDists(g *AGrid, sources []Point) {
+func PrecomputeRollAppleDists(g *game.AGrid, sources []game.Point) {
 	w, h := g.Width, g.Height
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
@@ -66,10 +70,10 @@ func PrecomputeRollAppleDists(g *AGrid, sources []Point) {
 	}
 	for i := 0; i < qLen; i++ {
 		q := queue[i]
-		for d := DirUp; d <= DirLeft; d++ {
-			nx := q.x + DirDelta[d].X
-			ny := q.y + DirDelta[d].Y
-			if nx < 0 || nx >= w || ny < 0 || ny >= h || g.IsWall(Point{nx, ny}) {
+		for d := game.DirUp; d <= game.DirLeft; d++ {
+			nx := q.x + game.DirDelta[d].X
+			ny := q.y + game.DirDelta[d].Y
+			if nx < 0 || nx >= w || ny < 0 || ny >= h || g.IsWall(game.Point{X: nx, Y: ny}) {
 				continue
 			}
 			nd := q.d + 1
@@ -85,22 +89,22 @@ func PrecomputeRollAppleDists(g *AGrid, sources []Point) {
 }
 
 // RollFloodCount does a bounded BFS flood from head through non-wall, non-occupied cells.
-func RollFloodCount(g *AGrid, head Point, occ *RollBG, maxCount int) int {
+func RollFloodCount(g *game.AGrid, head game.Point, occ *RollBG, maxCount int) int {
 	w, h := g.Width, g.Height
 	if g.IsWall(head) || rbHas(occ, head, w, h) {
 		return 0
 	}
 	var visited RollBG
 	rbSet(&visited, head, w, h)
-	var queue [64]Point
+	var queue [64]game.Point
 	queue[0] = head
 	qLen := 1
 	count := 0
 	for i := 0; i < qLen && count < maxCount; i++ {
 		p := queue[i]
 		count++
-		for d := DirUp; d <= DirLeft; d++ {
-			np := Add(p, DirDelta[d])
+		for d := game.DirUp; d <= game.DirLeft; d++ {
+			np := game.Add(p, game.DirDelta[d])
 			if g.IsWall(np) || rbHas(&visited, np, w, h) || rbHas(occ, np, w, h) {
 				continue
 			}
@@ -124,11 +128,11 @@ type RollBot struct {
 	ID    int
 	Owner int
 	Alive bool
-	Body  Body
+	Body  game.Body
 }
 
 type RollState struct {
-	Grid     *AGrid
+	Grid     *game.AGrid
 	Bots     [MaxRollBots]RollBot
 	BotCount int
 	Apples   RollBG
@@ -169,14 +173,14 @@ func (s *RollState) RebuildOcc() {
 	}
 }
 
-func (s *RollState) SimTurn(moves *[MaxRollBots]Direction) {
+func (s *RollState) SimTurn(moves *[MaxRollBots]game.Direction) {
 	s.doMoves(moves)
 	s.doEats()
 	s.doBeheadings()
 	s.doFalls()
 }
 
-func (s *RollState) doMoves(moves *[MaxRollBots]Direction) {
+func (s *RollState) doMoves(moves *[MaxRollBots]game.Direction) {
 	w, h := s.Grid.Width, s.Grid.Height
 	for i := 0; i < s.BotCount; i++ {
 		b := &s.Bots[i]
@@ -184,13 +188,13 @@ func (s *RollState) doMoves(moves *[MaxRollBots]Direction) {
 			continue
 		}
 		dir := moves[i]
-		if dir == DirNone {
+		if dir == game.DirNone {
 			dir = b.Body.Facing()
 		}
-		if dir == DirNone {
+		if dir == game.DirNone {
 			continue
 		}
-		newHead := Add(b.Body.Parts[0], DirDelta[dir])
+		newHead := game.Add(b.Body.Parts[0], game.DirDelta[dir])
 		willEat := rbHas(&s.Apples, newHead, w, h)
 		if !willEat && b.Body.Len > 0 {
 			rbClear(&s.Occ, b.Body.Parts[b.Body.Len-1], w, h)
@@ -266,7 +270,7 @@ func (s *RollState) doBeheadings() {
 			}
 			b.Alive = false
 			s.Losses[b.Owner] += b.Body.Len
-			b.Body.Reset()
+			game.BodyReset(&b.Body)
 			continue
 		}
 		rbClear(&s.Occ, b.Body.Parts[0], w, h)
@@ -276,9 +280,9 @@ func (s *RollState) doBeheadings() {
 	}
 }
 
-func (s *RollState) solidUnder(p Point, ignore *RollBG) bool {
+func (s *RollState) solidUnder(p game.Point, ignore *RollBG) bool {
 	w, h := s.Grid.Width, s.Grid.Height
-	below := Point{p.X, p.Y + 1}
+	below := game.Point{p.X, p.Y + 1}
 	if ignore != nil && rbHas(ignore, below, w, h) {
 		return false
 	}
@@ -353,7 +357,7 @@ func (s *RollState) doFalls() {
 						rbClear(&s.Occ, p, w, h)
 					}
 					b.Alive = false
-					b.Body.Reset()
+					game.BodyReset(&b.Body)
 				}
 			}
 		}
@@ -406,7 +410,7 @@ func (s *RollState) doIntercoiledFalls() bool {
 						rbClear(&s.Occ, p, w, h)
 					}
 					b.Alive = false
-					b.Body.Reset()
+					game.BodyReset(&b.Body)
 				}
 			}
 		}
@@ -437,8 +441,8 @@ func (s *RollState) getIntercoiledGroups() [][]int {
 				bb := &s.Bots[j]
 				touching := false
 				for _, p := range ba.Body.Slice() {
-					for dir := DirUp; dir <= DirLeft; dir++ {
-						np := Add(p, DirDelta[dir])
+					for dir := game.DirUp; dir <= game.DirLeft; dir++ {
+						np := game.Add(p, game.DirDelta[dir])
 						for _, op := range bb.Body.Slice() {
 							if op == np {
 								touching = true
@@ -472,10 +476,10 @@ func (s *RollState) getIntercoiledGroups() [][]int {
 // ---------------------------------------------------------------------------
 
 // SanitizeRollDir ensures dir is legal; falls back to first legal move.
-func SanitizeRollDir(s *State, body Body, dir Direction) Direction {
-	head, ok := body.Head()
+func SanitizeRollDir(s *game.State, body game.Body, dir game.Direction) game.Direction {
+	head, ok := game.BodyHead(&body)
 	if !ok {
-		return DirNone
+		return game.DirNone
 	}
 	legal := s.VMoves(head, body.Facing())
 	if len(legal) == 0 {
@@ -490,10 +494,10 @@ func SanitizeRollDir(s *State, body Body, dir Direction) Direction {
 }
 
 // RollPolicyDir picks a greedy move for botIdx in the rollout sim.
-func RollPolicyDir(s *State, sim *RollState, botIdx int, variant int) Direction {
+func RollPolicyDir(s *game.State, sim *RollState, botIdx int, variant int) game.Direction {
 	b := &sim.Bots[botIdx]
 	if !b.Alive || b.Body.Len == 0 {
-		return DirNone
+		return game.DirNone
 	}
 	head := b.Body.Parts[0]
 	facing := b.Body.Facing()
@@ -506,7 +510,7 @@ func RollPolicyDir(s *State, sim *RollState, botIdx int, variant int) Direction 
 	bestDir := legal[0]
 	bestScore := -1_000_000
 	for _, dir := range legal {
-		np := Add(head, DirDelta[dir])
+		np := game.Add(head, game.DirDelta[dir])
 		score := 0
 		if s.Grid.IsWall(np) {
 			score = -50000
@@ -538,7 +542,7 @@ func RollPolicyDir(s *State, sim *RollState, botIdx int, variant int) Direction 
 					continue
 				}
 				other := &sim.Bots[i]
-				dist := MDist(np, other.Body.Parts[0])
+				dist := game.MDist(np, other.Body.Parts[0])
 				if other.Owner == b.Owner {
 					if dist == 0 {
 						score -= 900
@@ -558,7 +562,7 @@ func RollPolicyDir(s *State, sim *RollState, botIdx int, variant int) Direction 
 }
 
 // EvalRollState scores a rollout state from myPlayer's perspective.
-func EvalRollState(sim *RollState, myPlayer int, targets []Point, hasTarget []bool) int {
+func EvalRollState(sim *RollState, myPlayer int, targets []game.Point, hasTarget []bool) int {
 	w, h := sim.Grid.Width, sim.Grid.Height
 	score := (sim.Scores[myPlayer] - sim.Scores[1-myPlayer]) * 1500
 	score -= (sim.Losses[myPlayer] - sim.Losses[1-myPlayer]) * 800
@@ -583,7 +587,7 @@ func EvalRollState(sim *RollState, myPlayer int, targets []Point, hasTarget []bo
 			score -= sign * ad * 20
 		}
 		if hasTarget[i] {
-			score -= sign * MDist(head, targets[i]) * 15
+			score -= sign * game.MDist(head, targets[i]) * 15
 		}
 		flood := RollFloodCount(sim.Grid, head, &sim.Occ, 32)
 		if flood <= 1 {
@@ -597,14 +601,14 @@ func EvalRollState(sim *RollState, myPlayer int, targets []Point, hasTarget []bo
 }
 
 // NearestTarget returns the closest source by SrcScore.
-func NearestTarget(g *AGrid, head Point, sources []Point) (Point, bool) {
+func NearestTarget(g *game.AGrid, head game.Point, sources []game.Point) (game.Point, bool) {
 	if len(sources) == 0 {
-		return Point{}, false
+		return game.Point{}, false
 	}
 	best := sources[0]
-	bestDist := SrcScore(g, head, best)
+	bestDist := game.SrcScore(g, head, best)
 	for _, s := range sources[1:] {
-		if d := SrcScore(g, head, s); d < bestDist {
+		if d := game.SrcScore(g, head, s); d < bestDist {
 			bestDist = d
 			best = s
 		}
@@ -628,13 +632,13 @@ const MCRolloutDepth = 5
 // MyBotInfo holds per-bot data for MC refinement.
 type MyBotInfo struct {
 	ID   int
-	Body []Point
+	Body []game.Point
 }
 
 // MCRefine evaluates candidate first-move combinations via averaged
 // greedy rollouts and updates plans with the best combination found.
-func MCRefine(s *State, mine []MyBotInfo, enemies []EnemyInfo, sources []Point,
-	plans []SearchResult, allOcc *BitGrid, deadline time.Time) {
+func MCRefine(s *game.State, mine []MyBotInfo, enemies []EnemyInfo, sources []game.Point,
+	plans []SearchResult, allOcc *game.BitGrid, deadline time.Time) {
 	cutoff := deadline.Add(-2 * time.Millisecond)
 	if len(mine) == 0 || time.Now().After(cutoff) {
 		return
@@ -651,19 +655,19 @@ func MCRefine(s *State, mine []MyBotInfo, enemies []EnemyInfo, sources []Point,
 	base.BotCount = nMy + nOpp
 	myIdx := make([]int, nMy)
 	oppIdx := make([]int, nOpp)
-	targets := make([]Point, base.BotCount)
+	targets := make([]game.Point, base.BotCount)
 	hasTarget := make([]bool, base.BotCount)
 
-	for i, bot := range mine {
+	for i, mb := range mine {
 		base.Bots[i] = RollBot{
-			ID: bot.ID, Owner: 0, Alive: true,
-			Body: NewBody(bot.Body),
+			ID: mb.ID, Owner: 0, Alive: true,
+			Body: game.NewBody(mb.Body),
 		}
 		myIdx[i] = i
 		if plans[i].Ok {
 			targets[i] = plans[i].Target
 			hasTarget[i] = true
-		} else if t, ok := NearestTarget(g, bot.Body[0], sources); ok {
+		} else if t, ok := NearestTarget(g, mb.Body[0], sources); ok {
 			targets[i] = t
 			hasTarget[i] = true
 		}
@@ -672,7 +676,7 @@ func MCRefine(s *State, mine []MyBotInfo, enemies []EnemyInfo, sources []Point,
 		idx := nMy + i
 		base.Bots[idx] = RollBot{
 			ID: -1 - i, Owner: 1, Alive: true,
-			Body: NewBody(enemy.Body),
+			Body: game.NewBody(enemy.Body),
 		}
 		oppIdx[i] = idx
 		if t, ok := NearestTarget(g, enemy.Head, sources); ok {
@@ -684,20 +688,18 @@ func MCRefine(s *State, mine []MyBotInfo, enemies []EnemyInfo, sources []Point,
 	base.RebuildOcc()
 
 	// Precompute enemy threat zones: cells any enemy head could reach next turn.
-	// Used to penalize our first moves that land on contested cells,
-	// independent of the rollout policy's enemy move prediction.
 	type eThreat struct {
-		cell    Point
+		cell    game.Point
 		bodyLen int
 	}
 	var enemyThreats []eThreat
 	for _, enemy := range enemies {
 		facing := enemy.Facing
-		if facing == DirNone {
-			facing = DirUp
+		if facing == game.DirNone {
+			facing = game.DirUp
 		}
 		for _, d := range s.VMoves(enemy.Head, facing) {
-			np := Add(enemy.Head, DirDelta[d])
+			np := game.Add(enemy.Head, game.DirDelta[d])
 			if !g.IsWall(np) {
 				enemyThreats = append(enemyThreats, eThreat{cell: np, bodyLen: enemy.BodyLen})
 			}
@@ -706,15 +708,15 @@ func MCRefine(s *State, mine []MyBotInfo, enemies []EnemyInfo, sources []Point,
 
 	// Candidate first moves per bot: plan direction + up to 2 alternatives
 	const maxCands = 3
-	type candSet [maxCands]Direction
+	type candSet [maxCands]game.Direction
 	perBot := make([]candSet, nMy)
 	perBotN := make([]int, nMy)
-	for i, bot := range mine {
-		facing := DirUp
-		if len(bot.Body) >= 2 {
-			facing = FacingPts(bot.Body[0], bot.Body[1])
+	for i, mb := range mine {
+		facing := game.DirUp
+		if len(mb.Body) >= 2 {
+			facing = game.FacingPts(mb.Body[0], mb.Body[1])
 		}
-		legal := s.VMoves(bot.Body[0], facing)
+		legal := s.VMoves(mb.Body[0], facing)
 		perBot[i][0] = plans[i].Dir
 		k := 1
 		for _, d := range legal {
@@ -737,10 +739,8 @@ func MCRefine(s *State, mine []MyBotInfo, enemies []EnemyInfo, sources []Point,
 
 	// Evaluate a candidate first-move set by averaging rollout variants
 	const maxTeam = 4
-	eval := func(firstMoves [maxTeam]Direction) int {
-		// Contested-cell penalty: penalize first moves into enemy threat zones.
-		// This catches head-on collision risk that the rollout policy may miss
-		// (policy predicts one enemy direction; enemy may choose another).
+	eval := func(firstMoves [maxTeam]game.Direction) int {
+		// Contested-cell penalty
 		contestPen := 0
 		for k := 0; k < nMy; k++ {
 			mb := &base.Bots[myIdx[k]]
@@ -748,17 +748,14 @@ func MCRefine(s *State, mine []MyBotInfo, enemies []EnemyInfo, sources []Point,
 				continue
 			}
 			dir := SanitizeRollDir(s, mb.Body, firstMoves[k])
-			dst := Add(mb.Body.Parts[0], DirDelta[dir])
+			dst := game.Add(mb.Body.Parts[0], game.DirDelta[dir])
 			for _, th := range enemyThreats {
 				if dst == th.cell {
 					if mb.Body.Len <= 3 {
-						// Fatal: we die entirely on collision
 						contestPen += 5000
 					} else if th.bodyLen > 3 {
-						// Both lose head — annoying but survivable
 						contestPen += 1000
 					}
-					// else: we're big, they're small — we survive, no penalty
 				}
 			}
 		}
@@ -768,9 +765,9 @@ func MCRefine(s *State, mine []MyBotInfo, enemies []EnemyInfo, sources []Point,
 			var sim RollState
 			sim.CopyFrom(&base)
 
-			var moves [MaxRollBots]Direction
+			var moves [MaxRollBots]game.Direction
 			for k := 0; k < sim.BotCount; k++ {
-				moves[k] = DirNone
+				moves[k] = game.DirNone
 			}
 			for k := 0; k < nMy; k++ {
 				moves[myIdx[k]] = SanitizeRollDir(s, sim.Bots[myIdx[k]].Body, firstMoves[k])
@@ -785,7 +782,7 @@ func MCRefine(s *State, mine []MyBotInfo, enemies []EnemyInfo, sources []Point,
 					if sim.Bots[k].Alive {
 						moves[k] = RollPolicyDir(s, &sim, k, step+v*7)
 					} else {
-						moves[k] = DirNone
+						moves[k] = game.DirNone
 					}
 				}
 				sim.SimTurn(&moves)
@@ -797,7 +794,7 @@ func MCRefine(s *State, mine []MyBotInfo, enemies []EnemyInfo, sources []Point,
 	}
 
 	// Evaluate baseline (current greedy plans)
-	var baseMoves [maxTeam]Direction
+	var baseMoves [maxTeam]game.Direction
 	for i := range mine {
 		baseMoves[i] = plans[i].Dir
 	}
@@ -805,7 +802,7 @@ func MCRefine(s *State, mine []MyBotInfo, enemies []EnemyInfo, sources []Point,
 	bestMoves := baseMoves
 
 	// Enumerate all candidate combinations recursively
-	var tryMoves [maxTeam]Direction
+	var tryMoves [maxTeam]game.Direction
 	timedOut := false
 	var enumerate func(bot int)
 	enumerate = func(bot int) {

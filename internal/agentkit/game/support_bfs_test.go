@@ -1,4 +1,4 @@
-package agentkit
+package game
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// stateFromSeed builds an agentkit State from engine seed + leagueLevel.
+// stateFromSeed builds a game State from engine seed + leagueLevel.
 // Returns state, apples list, and spawn islands (each island = sorted body coords).
 func stateFromSeed(seed int64, leagueLevel int) (State, []Point, [][]Point) {
 	rng := grid.NewSHA1PRNG(seed)
@@ -66,7 +66,7 @@ func TestSupPathBFS_Seed2248_AllApples(t *testing.T) {
 	initRun := state.Terr.BodyInitRun(body)
 
 	t.Logf("Map %dx%d, apples=%d, bot0 body=%+v initRun=%d",
-		state.Width(), state.Height(), len(apples), body, initRun)
+		state.Grid.Width, state.Grid.Height, len(apples), body, initRun)
 
 	for _, apple := range apples {
 		result := state.Terr.SupPathBFS(head, initRun, apple, &state.Apples)

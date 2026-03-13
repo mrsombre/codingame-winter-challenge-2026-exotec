@@ -1,22 +1,31 @@
-package agentkit
+package bot
 
 import (
 	"sort"
 	"time"
+
+	"codingame/internal/agentkit/game"
 )
 
 type SupportJob struct {
 	ClimberID int
-	Apple     Point
-	Cell      Point
+	Apple     game.Point
+	Cell      game.Point
 	Score     int
 }
 
-func limitedSupportTargets(targets []Point) []Point {
+func absI(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func limitedSupportTargets(targets []game.Point) []game.Point {
 	if len(targets) <= 4 {
 		return targets
 	}
-	cp := append([]Point(nil), targets...)
+	cp := append([]game.Point(nil), targets...)
 	sort.Slice(cp, func(i, j int) bool {
 		if cp[i].Y != cp[j].Y {
 			return cp[i].Y > cp[j].Y
@@ -26,23 +35,23 @@ func limitedSupportTargets(targets []Point) []Point {
 	return cp[:4]
 }
 
-func (s *State) PlanSupportJobs(mine []MyBotInfo, preferred [][]Point, sources []Point, botDists [][]int, deadline time.Time) map[int]SupportJob {
+func PlanSupportJobs(s *game.State, mine []MyBotInfo, preferred [][]game.Point, sources []game.Point, botDists [][]int, deadline time.Time) map[int]SupportJob {
 	if len(mine) < 2 || len(sources) == 0 || time.Until(deadline) < 18*time.Millisecond {
 		return nil
 	}
 
-	srcBG := NewBG(s.Grid.Width, s.Grid.Height)
-	FillBG(&srcBG, sources)
+	srcBG := game.NewBG(s.Grid.Width, s.Grid.Height)
+	game.FillBG(&srcBG, sources)
 
 	hasReachable := make([]bool, len(mine))
-	for i, bot := range mine {
-		bodyLen := len(bot.Body)
-		initRun := s.Terr.BodyInitRun(bot.Body)
+	for i, mb := range mine {
+		bodyLen := len(mb.Body)
+		initRun := s.Terr.BodyInitRun(mb.Body)
 		targets := limitedSupportTargets(preferred[i])
 		if len(targets) == 0 {
 			targets = limitedSupportTargets(sources)
 		}
-		if len(s.Terr.SupReachMulti(bot.Body[0], initRun, bodyLen, targets, &srcBG)) > 0 {
+		if len(s.Terr.SupReachMulti(mb.Body[0], initRun, bodyLen, targets, &srcBG)) > 0 {
 			hasReachable[i] = true
 		}
 	}
@@ -50,8 +59,8 @@ func (s *State) PlanSupportJobs(mine []MyBotInfo, preferred [][]Point, sources [
 	type supportCand struct {
 		supporter int
 		climber   int
-		apple     Point
-		cell      Point
+		apple     game.Point
+		cell      game.Point
 		score     int
 	}
 
@@ -79,9 +88,9 @@ func (s *State) PlanSupportJobs(mine []MyBotInfo, preferred [][]Point, sources [
 			if len(targets) == 0 {
 				targets = limitedSupportTargets(sources)
 			}
-			bestScore := Unreachable
-			var bestApple Point
-			var bestCell Point
+			bestScore := game.Unreachable
+			var bestApple game.Point
+			var bestCell game.Point
 
 			for _, apple := range targets {
 				if time.Until(deadline) < 8*time.Millisecond {
@@ -102,24 +111,24 @@ func (s *State) PlanSupportJobs(mine []MyBotInfo, preferred [][]Point, sources [
 						continue
 					}
 					for y := apple.Y + 1; y <= maxY; y++ {
-						cell := Point{X: sx, Y: y}
+						cell := game.Point{X: sx, Y: y}
 						if s.Grid.IsWall(cell) {
 							break
 						}
 						ci := cell.Y*W + cell.X
-						if botDists[supporter][ci] == Unreachable {
+						if botDists[supporter][ci] == game.Unreachable {
 							continue
 						}
 						minLen, climbDist := s.Terr.MinImmLen(cell, apple, &srcBG)
-						if minLen == Unreachable || minLen > climberLen {
+						if minLen == game.Unreachable || minLen > climberLen {
 							continue
 						}
 
 						score := botDists[supporter][ci] * 20
 						score += climbDist * 8
-						score += MDist(mine[climber].Body[0], cell) * 6
+						score += game.MDist(mine[climber].Body[0], cell) * 6
 						score -= apple.Y * 25
-						score += abs(dx) * 10
+						score += absI(dx) * 10
 						if s.Grid.WBelow(cell) {
 							score -= 15
 						}
@@ -132,7 +141,7 @@ func (s *State) PlanSupportJobs(mine []MyBotInfo, preferred [][]Point, sources [
 				}
 			}
 
-			if bestScore != Unreachable {
+			if bestScore != game.Unreachable {
 				cands = append(cands, supportCand{
 					supporter: supporter,
 					climber:   climber,
@@ -181,9 +190,9 @@ func (s *State) PlanSupportJobs(mine []MyBotInfo, preferred [][]Point, sources [
 	return jobs
 }
 
-func (s *State) BestGroundAction(body []Point, facing Direction, target Point,
-	dirInfo map[Direction]*DirInfo, enemies []EnemyInfo,
-	srcBG, occupied, danger *BitGrid) SearchResult {
+func BestGroundAction(s *game.State, body []game.Point, facing game.Direction, target game.Point,
+	dirInfo map[game.Direction]*DirInfo, enemies []EnemyInfo,
+	srcBG, occupied, danger *game.BitGrid) SearchResult {
 
 	bodyLen := len(body)
 	var best SearchResult
@@ -194,7 +203,7 @@ func (s *State) BestGroundAction(body []Point, facing Direction, target Point,
 		}
 
 		di := dirInfo[dir]
-		score := MDist(nb[0], target) * 12
+		score := game.MDist(nb[0], target) * 12
 		if nb[0].X == target.X {
 			score -= 12
 		}
@@ -208,7 +217,7 @@ func (s *State) BestGroundAction(body []Point, facing Direction, target Point,
 			score -= 60
 		}
 
-		below := Point{X: nb[0].X, Y: nb[0].Y + 1}
+		below := game.Point{X: nb[0].X, Y: nb[0].Y + 1}
 		if s.Grid.WBelow(nb[0]) || (srcBG != nil && srcBG.Has(below)) {
 			score -= 10
 		}
@@ -222,8 +231,8 @@ func (s *State) BestGroundAction(body []Point, facing Direction, target Point,
 			}
 			for _, e := range enemies {
 				canReach := false
-				for _, edir := range LegalDirs(e.Facing) {
-					if Add(e.Head, DirDelta[edir]) == nb[0] {
+				for _, edir := range game.LegalDirs(e.Facing) {
+					if game.Add(e.Head, game.DirDelta[edir]) == nb[0] {
 						canReach = true
 						break
 					}

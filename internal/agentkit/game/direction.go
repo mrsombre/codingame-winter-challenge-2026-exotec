@@ -1,4 +1,4 @@
-package agentkit
+package game
 
 type Direction int
 
@@ -61,4 +61,22 @@ func LegalDirs(facing Direction) [3]Direction {
 		}
 	}
 	return out
+}
+
+// ValidDirs returns up to 4 non-back directions.
+// Handles DirNone (returns all 4 cardinal directions).
+func ValidDirs(facing Direction) ([4]Direction, int) {
+	if facing == DirNone {
+		return [4]Direction{DirUp, DirRight, DirDown, DirLeft}, 4
+	}
+	back := Opp(facing)
+	var out [4]Direction
+	n := 0
+	for d := DirUp; d <= DirLeft; d++ {
+		if d != back {
+			out[n] = d
+			n++
+		}
+	}
+	return out, n
 }

@@ -4,9 +4,12 @@
       "Skill(agent-browser)",
       "Bash(wc *)",
       "Bash(* go run *)",
+      "Bash(go run:*)",
       "Bash(* go build *)",
+      "Bash(go build *)",
       "Bash(* go test *)",
-      "Bash(* go mod *)",
+      "Bash(go test *)",
+      "Bash(go mod *)",
       "Bash(make *)"
     ]
   }

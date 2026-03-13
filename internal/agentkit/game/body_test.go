@@ -1,4 +1,4 @@
-package agentkit
+package game
 
 import (
 	"testing"
@@ -32,11 +32,11 @@ func TestBodyHeadTailFacingContains(t *testing.T) {
 		{X: 5, Y: 6},
 	})
 
-	head, ok := body.Head()
+	head, ok := BodyHead(&body)
 	require.True(t, ok)
 	assert.Equal(t, Point{X: 5, Y: 4}, head)
 
-	tail, ok := body.Tail()
+	tail, ok := BodyTail(&body)
 	require.True(t, ok)
 	assert.Equal(t, Point{X: 5, Y: 6}, tail)
 
@@ -53,7 +53,7 @@ func TestBodyCopyAndReset(t *testing.T) {
 	})
 
 	var dst Body
-	dst.Copy(src)
+	BodyCopy(&dst, &src)
 
 	assert.Equal(t, src.Len, dst.Len)
 	assert.Equal(t, src.Slice()[1], dst.Slice()[1])
@@ -61,9 +61,9 @@ func TestBodyCopyAndReset(t *testing.T) {
 	src.Parts[0] = Point{X: 9, Y: 9}
 	assert.NotEqual(t, src.Slice()[0], dst.Slice()[0], "Copy() should copy values, not alias source")
 
-	dst.Reset()
+	BodyReset(&dst)
 	assert.Zero(t, dst.Len)
-	_, ok := dst.Head()
+	_, ok := BodyHead(&dst)
 	assert.False(t, ok, "Head() on empty body should be missing")
 	assert.Equal(t, DirNone, dst.Facing())
 }

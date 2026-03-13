@@ -1,4 +1,4 @@
-package agentkit
+package game
 
 // SBResult holds the result of a support-node BFS pathfinding.
 type SBResult struct {

@@ -10,12 +10,17 @@ P1 ?= opponent
 export GOCACHE := $(CURDIR)/tmp/go-build
 export GOMAXPROCS := 1
 
-.PHONY: test build-agent build-opponent match match-bin clean
+.PHONY: test build-agent build-opponent match match-bin bundle-% clean
 
 test:
 	go test ./...
 
-build-agent:
+bundle-%:
+	@if [ -d agent/$*/cmd ]; then \
+		$(BIN_DIR)/cgmerge --dir agent/$*/cmd --output agent/$*/bundle.go; \
+	fi
+
+build-agent: bundle-$(LOGIC)
 	mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/$(LOGIC) ./agent/$(LOGIC)
 

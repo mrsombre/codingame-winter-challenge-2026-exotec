@@ -1,4 +1,4 @@
-package agentkit
+package game
 
 // HasSupport reports whether any body part has physical support:
 //   - wall directly below (g.WBelow),

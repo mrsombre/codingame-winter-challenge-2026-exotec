@@ -1,4 +1,4 @@
-package agentkit
+package game
 
 import (
 	"testing"
@@ -35,7 +35,7 @@ func TestSTerrainApprNodesPreferLowestSupport(t *testing.T) {
 		"#####",
 	})
 
-	got := terrain.ApprNodes(Point{X: 2, Y: 0})
+	got := TerrApprNodes(terrain, Point{X: 2, Y: 0})
 	require.Len(t, got, 1)
 	assert.Equal(t, Point{X: 2, Y: 0}, terrain.Nodes[got[0]].Pos)
 }
@@ -175,119 +175,6 @@ func TestSTerrainSeed1001CloseSupFor116(t *testing.T) {
 	assertHas(Point{X: 12, Y: 10}, 4)
 	assertMissing(Point{X: 13, Y: 10})
 	assertMissing(Point{X: 15, Y: 8})
-}
-
-func TestStateRebuildSupMirrorsSeed1001(t *testing.T) {
-	layout := []string{
-		".#............................#.",
-		".#............................#.",
-		"..#..........................#..",
-		"...........#........#...........",
-		"...........##......##...........",
-		"................................",
-		".##....#................#....##.",
-		".......#......#..#......#.......",
-		".........##....##....##.........",
-		"#......##..............##......#",
-		".##.........##....##.........##.",
-		"........##..#......#..##........",
-		".#.....####.#......#.####.....#.",
-		".#....####..#..##..#..####....#.",
-		".#..######..#..##..#..######..#.",
-		"#############..##..#############",
-		"################################",
-	}
-	apples := []Point{
-		{X: 4, Y: 1}, {X: 27, Y: 1}, {X: 1, Y: 3}, {X: 30, Y: 3},
-		{X: 2, Y: 7}, {X: 29, Y: 7}, {X: 3, Y: 7}, {X: 28, Y: 7},
-		{X: 8, Y: 1}, {X: 23, Y: 1}, {X: 5, Y: 5}, {X: 26, Y: 5},
-		{X: 11, Y: 6}, {X: 20, Y: 6}, {X: 2, Y: 8}, {X: 29, Y: 8},
-		{X: 3, Y: 12}, {X: 28, Y: 12},
-	}
-
-	state := stateFromLayout(layout, apples)
-	state.RebuildSup()
-
-	left := state.AppleSup[Point{X: 4, Y: 1}]
-	right := state.AppleSup[Point{X: 27, Y: 1}]
-	require.NotEmpty(t, left, "expected mirrored apple supports, got left=%+v right=%+v", left, right)
-	require.NotEmpty(t, right, "expected mirrored apple supports, got left=%+v right=%+v", left, right)
-
-	assertHas := func(approaches []TAppr, support Point, minL int) {
-		t.Helper()
-		found := false
-		for _, a := range approaches {
-			if a.Cell == support && a.MinL == minL {
-				found = true
-				break
-			}
-		}
-		assert.Truef(t, found, "missing cell=%+v minL=%d in %+v", support, minL, approaches)
-	}
-
-	assertHas(left, Point{X: 2, Y: 2}, 2)
-	assertHas(right, Point{X: 29, Y: 2}, 2)
-}
-
-func TestStateRebuildSupFor206UsesLocalSupports(t *testing.T) {
-	layout := []string{
-		".#............................#.",
-		".#............................#.",
-		"..#..........................#..",
-		"...........#........#...........",
-		"...........##......##...........",
-		"................................",
-		".##....#................#....##.",
-		".......#......#..#......#.......",
-		".........##....##....##.........",
-		"#......##..............##......#",
-		".##.........##....##.........##.",
-		"........##..#......#..##........",
-		".#.....####.#......#.####.....#.",
-		".#....####..#..##..#..####....#.",
-		".#..######..#..##..#..######..#.",
-		"#############..##..#############",
-		"################################",
-	}
-	apples := []Point{
-		{X: 4, Y: 1}, {X: 27, Y: 1}, {X: 1, Y: 3}, {X: 30, Y: 3},
-		{X: 2, Y: 7}, {X: 29, Y: 7}, {X: 3, Y: 7}, {X: 28, Y: 7},
-		{X: 8, Y: 1}, {X: 23, Y: 1}, {X: 5, Y: 5}, {X: 26, Y: 5},
-		{X: 11, Y: 6}, {X: 20, Y: 6}, {X: 2, Y: 8}, {X: 29, Y: 8},
-		{X: 3, Y: 12}, {X: 28, Y: 12},
-	}
-
-	state := stateFromLayout(layout, apples)
-	state.RebuildSup()
-	got := state.AppleSup[Point{X: 20, Y: 6}]
-
-	assertHas := func(support Point, minL int) {
-		t.Helper()
-		found := false
-		for _, a := range got {
-			if a.Cell == support && a.MinL == minL {
-				found = true
-				break
-			}
-		}
-		assert.Truef(t, found, "missing cell=%+v minL=%d in %+v", support, minL, got)
-	}
-	assertMissing := func(support Point) {
-		t.Helper()
-		found := false
-		for _, a := range got {
-			if a.Cell == support {
-				found = true
-				break
-			}
-		}
-		assert.Falsef(t, found, "unexpected cell=%+v in %+v", support, got)
-	}
-
-	assertHas(Point{X: 21, Y: 8}, 2)
-	assertHas(Point{X: 17, Y: 7}, 3)
-	assertHas(Point{X: 19, Y: 10}, 4)
-	assertMissing(Point{X: 20, Y: 6})
 }
 
 func sTerrainFromLayout(layout []string) *STerrain {

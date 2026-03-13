@@ -1,4 +1,4 @@
-package agentkit
+package game
 
 const Unreachable = 9999
 
@@ -143,70 +143,6 @@ func (g *AGrid) CIdx(p Point) int {
 	return p.Y*g.Width + p.X
 }
 
-// --- DField -----------------------------------------------------------------
-
-type DField struct {
-	Width  int
-	Height int
-	Vals   []int
-}
-
-func (d DField) At(p Point) int {
-	if p.X < 0 || p.X >= d.Width || p.Y < 0 || p.Y >= d.Height {
-		return Unreachable
-	}
-	return d.Vals[p.Y*d.Width+p.X]
-}
-
-// --- AGrid BFS helpers ------------------------------------------------------
-
-func (g *AGrid) AppleDist(apples *BitGrid) DField {
-	n := g.Width * g.Height
-	field := DField{
-		Width:  g.Width,
-		Height: g.Height,
-		Vals:   make([]int, n),
-	}
-	for i := range field.Vals {
-		field.Vals[i] = Unreachable
-	}
-	if apples == nil {
-		return field
-	}
-
-	queue := make([]Point, 0, n)
-	for y := 0; y < g.Height; y++ {
-		for x := 0; x < g.Width; x++ {
-			p := Point{X: x, Y: y}
-			if g.IsWall(p) || !apples.Has(p) {
-				continue
-			}
-			field.Vals[y*g.Width+x] = 0
-			queue = append(queue, p)
-		}
-	}
-
-	for i := 0; i < len(queue); i++ {
-		p := queue[i]
-		bd := field.Vals[p.Y*g.Width+p.X]
-		for dir := DirUp; dir <= DirLeft; dir++ {
-			next := Add(p, DirDelta[dir])
-			if g.IsWall(next) {
-				continue
-			}
-			ni := next.Y*g.Width + next.X
-			nd := bd + 1
-			if nd >= field.Vals[ni] {
-				continue
-			}
-			field.Vals[ni] = nd
-			queue = append(queue, next)
-		}
-	}
-
-	return field
-}
-
 // FillBG resets bg then sets every point in pts.
 func FillBG(bg *BitGrid, pts []Point) {
 	bg.Reset()
@@ -223,34 +159,4 @@ func OccExcept(base *BitGrid, body []Point) BitGrid {
 		bg.Clear(p)
 	}
 	return bg
-}
-
-func (g *AGrid) Flood(start Point, occupied *BitGrid, maxN int) int {
-	if maxN <= 0 || !g.InB(start) || g.IsWall(start) {
-		return 0
-	}
-
-	visited := NewBG(g.Width, g.Height)
-	visited.Set(start)
-	queue := make([]Point, 1, maxN)
-	queue[0] = start
-	count := 0
-
-	for i := 0; i < len(queue) && count < maxN; i++ {
-		p := queue[i]
-		count++
-		for dir := DirUp; dir <= DirLeft; dir++ {
-			next := Add(p, DirDelta[dir])
-			if !g.InB(next) || g.IsWall(next) || visited.Has(next) {
-				continue
-			}
-			if occupied != nil && occupied.Has(next) {
-				continue
-			}
-			visited.Set(next)
-			queue = append(queue, next)
-		}
-	}
-
-	return count
 }

@@ -1,6 +1,10 @@
-package agentkit
+package bot
 
-import "time"
+import (
+	"time"
+
+	"codingame/internal/agentkit/game"
+)
 
 // ---------------------------------------------------------------------------
 // Zero-alloc one-turn simulation for refinePlans safety check.
@@ -12,8 +16,8 @@ const MaxBirds = 8
 
 type refBird struct {
 	owner  int
-	body   Body
-	facing Direction
+	body   game.Body
+	facing game.Direction
 	alive  bool
 }
 
@@ -27,37 +31,37 @@ type OneTurnOutcome struct {
 // Allocate once (e.g. in State or at top-level), reuse across all calls.
 type RefScratch struct {
 	birds   [MaxBirds]refBird
-	apples  BitGrid // init Bits once, Reset per call
-	occ     BitGrid // occupied
-	otherOc BitGrid // for occExcept inline
+	apples  game.BitGrid // init Bits once, Reset per call
+	occ     game.BitGrid // occupied
+	otherOc game.BitGrid // for occExcept inline
 
 	toBehead  [MaxBirds]bool
 	airborne  [MaxBirds]bool
 	grounded  [MaxBirds]bool
 	newlyGrnd [MaxBirds]int
 
-	eaten   [MaxBirds]Point
-	nextBuf [MaxBody + 1]Point // shared move buffer
+	eaten   [MaxBirds]game.Point
+	nextBuf [game.MaxBody + 1]game.Point // shared move buffer
 
-	enemyDirs [MaxBirds]Direction
-	ourDirs   [4]Direction
-	candidate [4]Direction
+	enemyDirs [MaxBirds]game.Direction
+	ourDirs   [4]game.Direction
+	candidate [4]game.Direction
 }
 
 func NewRefScratch(w, h int) RefScratch {
 	return RefScratch{
-		apples:  NewBG(w, h),
-		occ:     NewBG(w, h),
-		otherOc: NewBG(w, h),
+		apples:  game.NewBG(w, h),
+		occ:     game.NewBG(w, h),
+		otherOc: game.NewBG(w, h),
 	}
 }
 
 // SimOneTurn simulates one game turn with zero heap allocations.
 // mine bodies and enemy bodies are copied into scratch birds.
-func SimOneTurn(s *State, sc *RefScratch,
+func SimOneTurn(s *game.State, sc *RefScratch,
 	mine []MyBotInfo, enemies []EnemyInfo,
-	ourDirs []Direction, enemyDirs []Direction,
-	sources []Point) OneTurnOutcome {
+	ourDirs []game.Direction, enemyDirs []game.Direction,
+	sources []game.Point) OneTurnOutcome {
 
 	g := s.Grid
 	nMine := len(mine)
@@ -65,10 +69,10 @@ func SimOneTurn(s *State, sc *RefScratch,
 	nBirds := nMine + nEnemy
 
 	// --- init birds ---
-	for i, bot := range mine {
+	for i, mb := range mine {
 		b := &sc.birds[i]
 		b.owner = 0
-		b.body.Set(bot.Body)
+		b.body.Set(mb.Body)
 		b.facing = b.body.Facing()
 		b.alive = true
 	}
@@ -81,7 +85,7 @@ func SimOneTurn(s *State, sc *RefScratch,
 	}
 
 	// --- apples bitgrid ---
-	FillBG(&sc.apples, sources)
+	game.FillBG(&sc.apples, sources)
 
 	// --- move ---
 	for i := 0; i < nBirds; i++ {
@@ -89,21 +93,21 @@ func SimOneTurn(s *State, sc *RefScratch,
 		if !b.alive || b.body.Len == 0 {
 			continue
 		}
-		var dir Direction
+		var dir game.Direction
 		if i < nMine {
 			dir = ourDirs[i]
 		} else {
 			dir = enemyDirs[i-nMine]
 		}
-		if dir == DirNone {
+		if dir == game.DirNone {
 			dir = b.facing
 		}
-		if dir == DirNone {
+		if dir == game.DirNone {
 			continue
 		}
 
 		head := b.body.Parts[0]
-		newHead := Add(head, DirDelta[dir])
+		newHead := game.Add(head, game.DirDelta[dir])
 		willEat := sc.apples.Has(newHead)
 
 		n := 0
@@ -295,8 +299,8 @@ func SimOneTurn(s *State, sc *RefScratch,
 	return outcome
 }
 
-func isGroundedRef(c Point, grounded []bool, birds []refBird, apples *BitGrid, g *AGrid) bool {
-	below := Point{X: c.X, Y: c.Y + 1}
+func isGroundedRef(c game.Point, grounded []bool, birds []refBird, apples *game.BitGrid, g *game.AGrid) bool {
+	below := game.Point{X: c.X, Y: c.Y + 1}
 	if g.WBelow(c) {
 		return true
 	}
@@ -317,9 +321,9 @@ func OutcomeRisk(o OneTurnOutcome) int {
 }
 
 // WorstCasePlanRisk enumerates all enemy direction combos and returns max risk.
-func WorstCasePlanRisk(s *State, sc *RefScratch,
+func WorstCasePlanRisk(s *game.State, sc *RefScratch,
 	mine []MyBotInfo, enemies []EnemyInfo,
-	sources []Point, ourDirs []Direction) int {
+	sources []game.Point, ourDirs []game.Direction) int {
 
 	if len(enemies) == 0 {
 		o := SimOneTurn(s, sc, mine, enemies, ourDirs, nil, sources)
@@ -337,9 +341,9 @@ func WorstCasePlanRisk(s *State, sc *RefScratch,
 			}
 			return
 		}
-		dirs := LegalDirs(enemies[idx].Facing)
-		for _, d := range dirs {
-			sc.enemyDirs[idx] = d
+		dirs, nd := game.ValidDirs(enemies[idx].Facing)
+		for di := 0; di < nd; di++ {
+			sc.enemyDirs[idx] = dirs[di]
 			walk(idx + 1)
 		}
 	}
@@ -347,20 +351,22 @@ func WorstCasePlanRisk(s *State, sc *RefScratch,
 	return worst
 }
 
-// RefPlan holds a bot's current plan for RefinePlans.
-type RefPlan struct {
+// BotPlan holds a bot's current plan for RefinePlans.
+type BotPlan struct {
 	ID     int
-	Body   []Point
-	Facing Direction
-	Dir    Direction
-	Target Point
+	Body   []game.Point
+	Facing game.Direction
+	Dir    game.Direction
+	Target game.Point
+	Reason string
+	Ok     bool
 }
 
 // RefinePlans tries alternative first-move directions to minimise worst-case risk.
 // Updates plans in place. Zero heap allocations in the hot loop.
-func RefinePlans(s *State, sc *RefScratch,
+func RefinePlans(s *game.State, sc *RefScratch,
 	mine []MyBotInfo, enemies []EnemyInfo,
-	sources []Point, plans []RefPlan, deadline time.Time) {
+	sources []game.Point, plans []BotPlan, deadline time.Time) {
 
 	if len(mine) == 0 || len(enemies) == 0 || time.Until(deadline) < 8*time.Millisecond {
 		return
@@ -368,8 +374,8 @@ func RefinePlans(s *State, sc *RefScratch,
 
 	combos := 1
 	for _, enemy := range enemies {
-		dirs := LegalDirs(enemy.Facing)
-		combos *= len(dirs)
+		_, nd := game.ValidDirs(enemy.Facing)
+		combos *= nd
 		if combos > 128 {
 			return
 		}
@@ -386,8 +392,8 @@ func RefinePlans(s *State, sc *RefScratch,
 			break
 		}
 		currentDir := sc.ourDirs[i]
-		dirs := LegalDirs(plans[i].Facing)
-		for _, dir := range dirs {
+		dirs, nd := game.ValidDirs(plans[i].Facing)
+		for _, dir := range dirs[:nd] {
 			if dir == currentDir {
 				continue
 			}
@@ -399,7 +405,9 @@ func RefinePlans(s *State, sc *RefScratch,
 				bestRisk = risk
 				sc.ourDirs = sc.candidate
 				plans[i].Dir = dir
-				plans[i].Target = Add(plans[i].Body[0], DirDelta[dir])
+				plans[i].Target = game.Add(plans[i].Body[0], game.DirDelta[dir])
+				plans[i].Reason = "safety"
+				plans[i].Ok = true
 			}
 		}
 	}
