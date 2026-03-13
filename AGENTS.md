@@ -29,28 +29,32 @@ go1.18.1 test <puzzle_folder>
 docker compose run --rm builder go test ./..
 ```
 
-## Project Commands
+## Building and Testing
+
+ALWAYS use `make` targets. NEVER run `go build` or `go run ./cmd/match` directly.
 
 ```shell
-# GOCACHE is exported in the Makefile, use make targets:
+# Run tests
 make test
 
-make build-agent LOGIC=greed
+# Build a bot binary into ./bin/<name>
+make build-agent LOGIC=basic
+
+# Build the baseline opponent into ./bin/opponent
 make build-opponent
-
-# greed vs default opponent binary
-make match LOGIC=greed
-
-# arbitrary binary-vs-binary match
-make match-bin P0=greed P1=opponent
 ```
 
-## Match Workflow
+## Running Matches
 
-- Build arena bots from `agent/<logic>` into `bin/<logic>` with `make build-agent LOGIC=<logic>`
-- Build the default baseline opponent with `make build-opponent`
-- Run local batches through `go run ./cmd/match ...` or the `make match` / `make match-bin` wrappers
-- `make match` defaults to:
-  - `ENGINE_ARGS=--simulations 30 --parallel 5 --seed 50 --output-matches`
-  - `GAME_ARGS=--max-turns 100`
-- `cmd/match` defaults player 1 to `./bin/opponent` when `--p1-bin` is not supplied
+ALWAYS use `make match` or `make match-bin`. Default: 30 simulations, 5 parallel, 100 max turns.
+
+```shell
+# Build + run: basic vs opponent (30 matches, 5 parallel)
+make match LOGIC=basic
+
+# Override match count
+make match LOGIC=basic ENGINE_ARGS="--simulations 50 --parallel 5 --seed 50"
+
+# Run two pre-built binaries against each other
+make match-bin P0=basic P1=opponent
+```

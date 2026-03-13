@@ -141,6 +141,35 @@ func (g *AGrid) CDirs(pos Point) []Direction {
 func (g *AGrid) CIdx(p Point) int { return p.Y*g.Width + p.X }
 
 const MaxBody = 80
+const MaxBirds = 8
+
+type fBody struct {
+	parts [MaxBody + 1]Point
+	len   int
+}
+
+func (b *fBody) set(pts []Point) {
+	b.len = len(pts)
+	copy(b.parts[:b.len], pts)
+}
+
+func (b *fBody) slice() []Point { return b.parts[:b.len] }
+
+func (b *fBody) facing() Direction {
+	if b.len < 2 {
+		return DirUp
+	}
+	return FacingPts(b.parts[0], b.parts[1])
+}
+
+func (b *fBody) contains(p Point) bool {
+	for i := 0; i < b.len; i++ {
+		if b.parts[i] == p {
+			return true
+		}
+	}
+	return false
+}
 
 type State struct {
 	Grid   *AGrid
@@ -650,6 +679,7 @@ var (
 	scanner *bufio.Scanner
 	grid    *AGrid
 	state   State
+	rsc     refScratch
 	W, H    int
 )
 
@@ -931,9 +961,9 @@ func actionString(id int, dir Direction, reason string) string {
 	return fmt.Sprintf("%d %s", id, DirName[dir])
 }
 
-type localBird struct {
+type refBird struct {
 	owner  int
-	body   []Point
+	body   fBody
 	facing Direction
 	alive  bool
 }
@@ -944,141 +974,178 @@ type oneTurnOutcome struct {
 	trapped [2]int
 }
 
-func bodyContains(body []Point, target Point) bool {
-	for _, p := range body {
-		if p == target {
-			return true
-		}
-	}
-	return false
+type refScratch struct {
+	birds     [MaxBirds]refBird
+	apples    BitGrid
+	occ       BitGrid
+	otherOc   BitGrid
+	toBehead  [MaxBirds]bool
+	airborne  [MaxBirds]bool
+	grounded  [MaxBirds]bool
+	newlyGrnd [MaxBirds]int
+	eaten     [MaxBirds]Point
+	nextBuf   [MaxBody + 1]Point
+	enemyDirs [MaxBirds]Direction
+	ourDirs   [4]Direction
+	candidate [4]Direction
 }
 
-func hasTileOrAppleUnderLocal(c Point, apples *BitGrid) bool {
-	below := Point{c.X, c.Y + 1}
-	if grid.InB(below) && grid.IsWall(below) {
-		return true
+func newRefScratch(w, h int) refScratch {
+	return refScratch{
+		apples:  NewBG(w, h),
+		occ:     NewBG(w, h),
+		otherOc: NewBG(w, h),
 	}
-	return apples != nil && apples.Has(below)
 }
 
-func isGroundedLocal(c Point, grounded []bool, birds []localBird, apples *BitGrid) bool {
-	if hasTileOrAppleUnderLocal(c, apples) {
+func isGroundedRef(c Point, grounded []bool, birds []refBird, apples *BitGrid) bool {
+	below := Point{c.X, c.Y + 1}
+	if grid.WBelow(c) {
 		return true
 	}
-	below := Point{c.X, c.Y + 1}
+	if apples.Has(below) {
+		return true
+	}
 	for i, ok := range grounded {
-		if ok && birds[i].alive && bodyContains(birds[i].body, below) {
+		if ok && birds[i].alive && birds[i].body.contains(below) {
 			return true
 		}
 	}
 	return false
 }
 
-func simulateOneTurn(mine []botEntry, enemies []enemyInfo, ourDirs, enemyDirs []Direction, sources []Point) oneTurnOutcome {
-	birds := make([]localBird, 0, len(mine)+len(enemies))
-	for _, bot := range mine {
-		body := append([]Point(nil), bot.body...)
-		birds = append(birds, localBird{owner: 0, body: body, facing: bodyFacing(body), alive: true})
+func simulateOneTurn(sc *refScratch, mine []botEntry, enemies []enemyInfo, ourDirs, enemyDirs []Direction, sources []Point) oneTurnOutcome {
+	nMine := len(mine)
+	nEnemy := len(enemies)
+	nBirds := nMine + nEnemy
+
+	// --- init birds ---
+	for i, bot := range mine {
+		b := &sc.birds[i]
+		b.owner = 0
+		b.body.set(bot.body)
+		b.facing = b.body.facing()
+		b.alive = true
 	}
-	for _, enemy := range enemies {
-		body := append([]Point(nil), enemy.body...)
-		birds = append(birds, localBird{owner: 1, body: body, facing: enemy.facing, alive: true})
+	for i, enemy := range enemies {
+		b := &sc.birds[nMine+i]
+		b.owner = 1
+		b.body.set(enemy.body)
+		b.facing = enemy.facing
+		b.alive = true
 	}
 
-	apples := NewBG(W, H)
-	fillBG(&apples, sources)
+	// --- apples ---
+	fillBG(&sc.apples, sources)
 
-	for i := range birds {
-		if !birds[i].alive || len(birds[i].body) == 0 {
+	// --- move ---
+	for i := 0; i < nBirds; i++ {
+		b := &sc.birds[i]
+		if !b.alive || b.body.len == 0 {
 			continue
 		}
 		var dir Direction
-		if i < len(mine) {
+		if i < nMine {
 			dir = ourDirs[i]
 		} else {
-			dir = enemyDirs[i-len(mine)]
+			dir = enemyDirs[i-nMine]
 		}
 		if dir == DirNone {
-			dir = birds[i].facing
+			dir = b.facing
 		}
 		if dir == DirNone {
 			continue
 		}
 
-		head := birds[i].body[0]
+		head := b.body.parts[0]
 		newHead := Add(head, DirDelta[dir])
-		willEat := apples.Has(newHead)
-		nextBody := make([]Point, 0, len(birds[i].body)+1)
-		nextBody = append(nextBody, newHead)
+		willEat := sc.apples.Has(newHead)
+
+		n := 0
+		sc.nextBuf[n] = newHead
+		n++
 		if willEat {
-			nextBody = append(nextBody, birds[i].body...)
+			copy(sc.nextBuf[n:], b.body.parts[:b.body.len])
+			n += b.body.len
 		} else {
-			nextBody = append(nextBody, birds[i].body[:len(birds[i].body)-1]...)
+			copy(sc.nextBuf[n:], b.body.parts[:b.body.len-1])
+			n += b.body.len - 1
 		}
-		birds[i].body = nextBody
+		b.body.len = n
+		copy(b.body.parts[:n], sc.nextBuf[:n])
 	}
 
-	eaten := make([]Point, 0, len(birds))
-	for i := range birds {
-		if birds[i].alive && len(birds[i].body) > 0 && apples.Has(birds[i].body[0]) {
-			eaten = append(eaten, birds[i].body[0])
+	// --- eat apples ---
+	nEaten := 0
+	for i := 0; i < nBirds; i++ {
+		b := &sc.birds[i]
+		if b.alive && b.body.len > 0 && sc.apples.Has(b.body.parts[0]) {
+			sc.eaten[nEaten] = b.body.parts[0]
+			nEaten++
 		}
 	}
-	for _, apple := range eaten {
-		apples.Clear(apple)
+	for k := 0; k < nEaten; k++ {
+		sc.apples.Clear(sc.eaten[k])
 	}
 
+	// --- beheadings ---
 	var outcome oneTurnOutcome
-	toBehead := make([]bool, len(birds))
-	for i := range birds {
-		if !birds[i].alive || len(birds[i].body) == 0 {
+	for i := 0; i < nBirds; i++ {
+		sc.toBehead[i] = false
+	}
+	for i := 0; i < nBirds; i++ {
+		bi := &sc.birds[i]
+		if !bi.alive || bi.body.len == 0 {
 			continue
 		}
-		head := birds[i].body[0]
+		head := bi.body.parts[0]
 		if grid.IsWall(head) {
-			toBehead[i] = true
+			sc.toBehead[i] = true
 			continue
 		}
-		for j := range birds {
-			if !birds[j].alive || len(birds[j].body) == 0 {
+		for j := 0; j < nBirds; j++ {
+			bj := &sc.birds[j]
+			if !bj.alive || bj.body.len == 0 {
 				continue
 			}
-			if !bodyContains(birds[j].body, head) {
+			if !bj.body.contains(head) {
 				continue
 			}
 			if i != j {
-				toBehead[i] = true
+				sc.toBehead[i] = true
 				break
 			}
-			for _, part := range birds[j].body[1:] {
-				if part == head {
-					toBehead[i] = true
+			for k := 1; k < bj.body.len; k++ {
+				if bj.body.parts[k] == head {
+					sc.toBehead[i] = true
 					break
 				}
 			}
-			if toBehead[i] {
+			if sc.toBehead[i] {
 				break
 			}
 		}
 	}
-	for i, behead := range toBehead {
-		if !behead {
+	for i := 0; i < nBirds; i++ {
+		if !sc.toBehead[i] {
 			continue
 		}
-		if len(birds[i].body) <= 3 {
-			outcome.losses[birds[i].owner] += len(birds[i].body)
-			outcome.deaths[birds[i].owner]++
-			birds[i].alive = false
+		b := &sc.birds[i]
+		if b.body.len <= 3 {
+			outcome.losses[b.owner] += b.body.len
+			outcome.deaths[b.owner]++
+			b.alive = false
 			continue
 		}
-		outcome.losses[birds[i].owner]++
-		birds[i].body = birds[i].body[1:]
+		outcome.losses[b.owner]++
+		copy(b.body.parts[:b.body.len-1], b.body.parts[1:b.body.len])
+		b.body.len--
 	}
 
-	airborne := make([]bool, len(birds))
-	grounded := make([]bool, len(birds))
-	for i := range birds {
-		airborne[i] = birds[i].alive
+	// --- gravity ---
+	for i := 0; i < nBirds; i++ {
+		sc.airborne[i] = sc.birds[i].alive
+		sc.grounded[i] = false
 	}
 	somethingFell := true
 	for somethingFell {
@@ -1086,77 +1153,89 @@ func simulateOneTurn(mine []botEntry, enemies []enemyInfo, ourDirs, enemyDirs []
 		somethingGotGrounded := true
 		for somethingGotGrounded {
 			somethingGotGrounded = false
-			newlyGrounded := make([]int, 0, len(birds))
-			for i := range birds {
-				if !airborne[i] {
+			nNewlyGrnd := 0
+			for i := 0; i < nBirds; i++ {
+				if !sc.airborne[i] {
 					continue
 				}
-				isGrounded := false
-				for _, c := range birds[i].body {
-					if isGroundedLocal(c, grounded, birds, &apples) {
-						isGrounded = true
+				bi := &sc.birds[i]
+				isGrnd := false
+				for k := 0; k < bi.body.len; k++ {
+					if isGroundedRef(bi.body.parts[k], sc.grounded[:nBirds], sc.birds[:nBirds], &sc.apples) {
+						isGrnd = true
 						break
 					}
 				}
-				if isGrounded {
-					newlyGrounded = append(newlyGrounded, i)
+				if isGrnd {
+					sc.newlyGrnd[nNewlyGrnd] = i
+					nNewlyGrnd++
 				}
 			}
-			if len(newlyGrounded) > 0 {
+			if nNewlyGrnd > 0 {
 				somethingGotGrounded = true
-				for _, idx := range newlyGrounded {
-					grounded[idx] = true
-					airborne[idx] = false
+				for k := 0; k < nNewlyGrnd; k++ {
+					idx := sc.newlyGrnd[k]
+					sc.grounded[idx] = true
+					sc.airborne[idx] = false
 				}
 			}
 		}
 
-		for i := range birds {
-			if !airborne[i] {
+		for i := 0; i < nBirds; i++ {
+			if !sc.airborne[i] {
 				continue
 			}
 			somethingFell = true
-			for j := range birds[i].body {
-				birds[i].body[j].Y++
+			bi := &sc.birds[i]
+			for j := 0; j < bi.body.len; j++ {
+				bi.body.parts[j].Y++
 			}
 			allOut := true
-			for _, part := range birds[i].body {
-				if part.Y < H+1 {
+			for j := 0; j < bi.body.len; j++ {
+				if bi.body.parts[j].Y < H+1 {
 					allOut = false
 					break
 				}
 			}
 			if allOut {
-				outcome.deaths[birds[i].owner]++
-				birds[i].alive = false
-				airborne[i] = false
+				outcome.deaths[bi.owner]++
+				bi.alive = false
+				sc.airborne[i] = false
 			}
 		}
 	}
 
-	for i := range birds {
-		if birds[i].alive {
-			birds[i].facing = bodyFacing(birds[i].body)
+	// --- update facing ---
+	for i := 0; i < nBirds; i++ {
+		if sc.birds[i].alive {
+			sc.birds[i].facing = sc.birds[i].body.facing()
 		}
 	}
 
-	occupied := NewBG(W, H)
-	for i := range birds {
-		if !birds[i].alive {
+	// --- trapped check (our bots only) ---
+	sc.occ.Reset()
+	for i := 0; i < nBirds; i++ {
+		if !sc.birds[i].alive {
 			continue
 		}
-		for _, p := range birds[i].body {
-			occupied.Set(p)
+		bi := &sc.birds[i]
+		for k := 0; k < bi.body.len; k++ {
+			sc.occ.Set(bi.body.parts[k])
 		}
 	}
-	for i := 0; i < len(mine); i++ {
-		if !birds[i].alive || len(birds[i].body) == 0 {
+	for i := 0; i < nMine; i++ {
+		bi := &sc.birds[i]
+		if !bi.alive || bi.body.len == 0 {
 			continue
 		}
-		otherOcc := occExcept(&occupied, birds[i].body)
+		copy(sc.otherOc.Bits, sc.occ.Bits)
+		for k := 0; k < bi.body.len; k++ {
+			sc.otherOc.Clear(bi.body.parts[k])
+		}
 		hasEscape := false
-		for _, dir := range state.VMoves(birds[i].body[0], birds[i].facing) {
-			_, _, alive, _, _ := simMove(birds[i].body, birds[i].facing, dir, &apples, &otherOcc)
+		body := bi.body.slice()
+		for _, dir := range state.VMoves(body[0], bi.facing) {
+			_, _, alive, _, _ := simMove(body, bi.facing, dir, &sc.apples, &sc.otherOc)
 			if alive {
 				hasEscape = true
 				break
@@ -1174,17 +1253,16 @@ func outcomeRisk(outcome oneTurnOutcome) int {
 	return outcome.deaths[0]*100000 + outcome.trapped[0]*5000 + outcome.losses[0]*100 - outcome.deaths[1]*20 - outcome.losses[1]
 }
 
-func worstCasePlanRisk(mine []botEntry, enemies []enemyInfo, sources []Point, ourDirs []Direction) int {
+func worstCasePlanRisk(sc *refScratch, mine []botEntry, enemies []enemyInfo, sources []Point, ourDirs []Direction) int {
 	if len(enemies) == 0 {
-		return outcomeRisk(simulateOneTurn(mine, nil, ourDirs, nil, sources))
+		return outcomeRisk(simulateOneTurn(sc, mine, nil, ourDirs, nil, sources))
 	}
 
-	enemyDirs := make([]Direction, len(enemies))
 	worst := -1
 	var walk func(idx int)
 	walk = func(idx int) {
 		if idx == len(enemies) {
-			risk := outcomeRisk(simulateOneTurn(mine, enemies, ourDirs, enemyDirs, sources))
+			risk := outcomeRisk(simulateOneTurn(sc, mine, enemies, ourDirs, sc.enemyDirs[:len(enemies)], sources))
 			if risk > worst {
 				worst = risk
 			}
@@ -1192,7 +1270,7 @@ func worstCasePlanRisk(mine []botEntry, enemies []enemyInfo, sources []Point, ou
 		}
 		dirs, nd := validDirs(enemies[idx].facing)
 		for di := 0; di < nd; di++ {
-			enemyDirs[idx] = dirs[di]
+			sc.enemyDirs[idx] = dirs[di]
 			walk(idx + 1)
 		}
 	}
@@ -1200,7 +1278,7 @@ func worstCasePlanRisk(mine []botEntry, enemies []enemyInfo, sources []Point, ou
 	return worst
 }
 
-func refinePlansWithOneTurnSafety(mine []botEntry, enemies []enemyInfo, sources []Point, plans []botPlan, deadline time.Time) {
+func refinePlansWithOneTurnSafety(sc *refScratch, mine []botEntry, enemies []enemyInfo, sources []Point, plans []botPlan, deadline time.Time) {
 	if len(mine) == 0 || len(enemies) == 0 || time.Until(deadline) < 8*time.Millisecond {
 		return
 	}
@@ -1214,28 +1292,28 @@ func refinePlansWithOneTurnSafety(mine []botEntry, enemies []enemyInfo, sources 
 		}
 	}
 
-	ourDirs := make([]Direction, len(plans))
-	for i := range plans {
-		ourDirs[i] = plans[i].dir
+	nPlans := len(plans)
+	for i := 0; i < nPlans; i++ {
+		sc.ourDirs[i] = plans[i].dir
 	}
 
-	bestRisk := worstCasePlanRisk(mine, enemies, sources, ourDirs)
-	for i := range plans {
+	bestRisk := worstCasePlanRisk(sc, mine, enemies, sources, sc.ourDirs[:nPlans])
+	for i := 0; i < nPlans; i++ {
 		if time.Until(deadline) < 4*time.Millisecond {
 			break
 		}
-		currentDir := ourDirs[i]
+		currentDir := sc.ourDirs[i]
 		dirs, nd := validDirs(plans[i].facing)
 		for _, dir := range dirs[:nd] {
 			if dir == currentDir {
 				continue
 			}
-			candidate := append([]Direction(nil), ourDirs...)
-			candidate[i] = dir
-			risk := worstCasePlanRisk(mine, enemies, sources, candidate)
+			sc.candidate = sc.ourDirs
+			sc.candidate[i] = dir
+			risk := worstCasePlanRisk(sc, mine, enemies, sources, sc.candidate[:nPlans])
 			if risk < bestRisk {
 				bestRisk = risk
-				ourDirs = candidate
+				sc.ourDirs = sc.candidate
 				plans[i].dir = dir
 				plans[i].target = Add(plans[i].body[0], DirDelta[dir])
 				plans[i].reason = "safety"
@@ -1822,6 +1900,7 @@ func main() {
 	}
 	grid = NewAG(W, H, walls)
 	state = NewState(grid)
+	rsc = newRefScratch(W, H)
 
 	var botsPerPlayer int
 	fmt.Sscan(readline(), &botsPerPlayer)
@@ -2073,7 +2152,7 @@ func main() {
 			plannedHeads.Set(Add(head, DirDelta[plan.dir]))
 		}
 
-		refinePlansWithOneTurnSafety(mine, enemies, sources, plans, turnDeadline)
+		refinePlansWithOneTurnSafety(&rsc, mine, enemies, sources, plans, turnDeadline)
 
 		var actions []string
 		var marks []Point
