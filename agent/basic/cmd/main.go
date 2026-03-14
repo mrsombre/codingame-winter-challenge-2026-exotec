@@ -20,69 +20,82 @@ func main() {
 	s := bufio.NewScanner(os.Stdin)
 	s.Buffer(make([]byte, 1000000), 1000000)
 
-	var mId int
+	st := rInit(s)
+
+	// first turn: read + precompute within 1s budget
+	rTurn(s, st)
+	// TODO: precompute here
+
+	fmt.Println("WAIT")
+
+	for {
+		rTurn(s, st)
+
+		fmt.Println("WAIT")
+	}
+}
+
+func rInit(s *bufio.Scanner) *src.State {
+	st := &src.State{}
+
+	// player id
 	s.Scan()
-	fmt.Sscan(s.Text(), &mId)
-	log(mId)
+	fmt.Sscan(s.Text(), &st.ID)
+	log(st.ID)
 
 	// grid
-	var w int
+	var w, h int
 	s.Scan()
 	fmt.Sscan(s.Text(), &w)
-	log(w)
-	var h int
 	s.Scan()
 	fmt.Sscan(s.Text(), &h)
-	log(h)
 	rows := make([]string, h)
 	for i := 0; i < h; i++ {
 		s.Scan()
 		rows[i] = s.Text()
 		log(rows[i])
 	}
-	_ = src.NewGrid(w, h, rows)
+	st.G = src.NewGrid(w, h, rows)
 
-	// snakes
+	// snake ids
 	var sp int
 	s.Scan()
 	fmt.Sscan(s.Text(), &sp)
-	// my
+	st.MyN = sp
 	for i := 0; i < sp; i++ {
-		var id int
 		s.Scan()
-		fmt.Sscan(s.Text(), &id)
+		fmt.Sscan(s.Text(), &st.MyIDs[i])
 	}
-	// enemy
+	st.OppN = sp
 	for i := 0; i < sp; i++ {
-		var id int
 		s.Scan()
-		fmt.Sscan(s.Text(), &id)
+		fmt.Sscan(s.Text(), &st.OppIDs[i])
+	}
+	log(st.MyIDs[:st.MyN], st.OppIDs[:st.OppN])
+
+	return st
+}
+
+func rTurn(s *bufio.Scanner, st *src.State) {
+	// apples
+	s.Scan()
+	fmt.Sscan(s.Text(), &st.AppleN)
+	for i := 0; i < st.AppleN; i++ {
+		var x, y int
+		s.Scan()
+		fmt.Sscan(s.Text(), &x, &y)
+		st.SetApple(i, x, y)
 	}
 
-	for {
-		var pc int
+	// snakes
+	s.Scan()
+	fmt.Sscan(s.Text(), &st.SnakeN)
+	for i := 0; i < st.SnakeN; i++ {
+		var id int
+		var body string
 		s.Scan()
-		fmt.Sscan(s.Text(), &pc)
-
-		for i := 0; i < pc; i++ {
-			var x, y int
-			s.Scan()
-			fmt.Sscan(s.Text(), &x, &y)
-			log(x, y)
-		}
-		var cnt int
-		s.Scan()
-		fmt.Sscan(s.Text(), &cnt)
-
-		for i := 0; i < cnt; i++ {
-			var id int
-			var b string
-			s.Scan()
-			fmt.Sscan(s.Text(), &id, &b)
-			log(id, b)
-		}
-
-		// fmt.Fprintln(os.Stderr, "Debug messages...")
-		fmt.Println("WAIT") // Write action to stdout
+		fmt.Sscan(s.Text(), &id, &body)
+		st.SetSnake(i, id, body)
+		log(id, body)
 	}
 }
