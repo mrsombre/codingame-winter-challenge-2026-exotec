@@ -15,14 +15,12 @@ export GOMAXPROCS := 1
 test:
 	go test ./...
 
-bundle-%:
-	@if [ -d agent/$*/cmd ]; then \
-		$(BIN_DIR)/cgmerge --dir agent/$*/cmd --output agent/$*/bundle.go; \
-	fi
+bundle-agent:
+	cgmerge --dir agent/$(LOGIC)/cmd --output agent/$(LOGIC)/bundle/bundle.go; \
 
-build-agent: bundle-$(LOGIC)
+build-agent: bundle-agent
 	mkdir -p $(BIN_DIR)
-	go build -o $(BIN_DIR)/$(LOGIC) ./agent/$(LOGIC)
+	go build -o $(BIN_DIR)/$(LOGIC) ./agent/$(LOGIC)/bundle
 
 build-opponent:
 	mkdir -p $(BIN_DIR)
