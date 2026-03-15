@@ -1,4 +1,9 @@
-package src
+package main
+
+import (
+	"bufio"
+	"fmt"
+)
 
 const (
 	DU = 0 // up    dy=-1
@@ -26,6 +31,24 @@ type Grid struct {
 	W, H int
 	Wall [(MaxCells + 63) / 64]uint64
 	Nb   [MaxCells][4]int // precomputed neighbor index; -1 = blocked
+}
+
+// GFI reads w, h, and row strings from scanner and builds a Grid.
+func GFI(s *bufio.Scanner) *Grid {
+	var w, h int
+	s.Scan()
+	fmt.Sscan(s.Text(), &w)
+	log(w)
+	s.Scan()
+	fmt.Sscan(s.Text(), &h)
+	log(h)
+	rows := make([]string, h)
+	for i := 0; i < h; i++ {
+		s.Scan()
+		rows[i] = s.Text()
+		log(rows[i])
+	}
+	return NewGrid(w, h, rows)
 }
 
 // NewGrid builds an immutable grid from '.#' row strings.

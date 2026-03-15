@@ -1,6 +1,8 @@
-package src
+package main
 
 import (
+	"bufio"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -194,7 +196,25 @@ func TestDirName(t *testing.T) {
 	assert.Equal(t, "LEFT", DirName[DL])
 }
 
+func TestGridFromInput(t *testing.T) {
+	s := gridScanner(testW, testH, testRows)
+	g := GFI(s)
+
+	want := testGrid()
+	assert.Equal(t, want.W, g.W)
+	assert.Equal(t, want.H, g.H)
+	assert.Equal(t, want.Wall, g.Wall)
+	assert.Equal(t, want.Nb, g.Nb)
+}
+
 // helpers
+
+func gridScanner(w, h int, rows []string) *bufio.Scanner {
+	lines := make([]string, 0, 2+len(rows))
+	lines = append(lines, fmt.Sprintf("%d", w), fmt.Sprintf("%d", h))
+	lines = append(lines, rows...)
+	return stateScanner(lines...)
+}
 
 func makeRow(w int, ch byte) string {
 	b := make([]byte, w)

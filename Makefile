@@ -13,10 +13,10 @@ export GOMAXPROCS := 1
 .PHONY: test build-agent build-opponent match match-bin bundle-% clean
 
 test:
-	go test ./agent/basic/...
+	go test ./agent/$(LOGIC)/src
 
 bundle-agent:
-	cgmerge --dir agent/$(LOGIC)/cmd --output agent/$(LOGIC)/bundle/bundle.go; \
+	cgmerge --dir agent/$(LOGIC)/src --output agent/$(LOGIC)/bundle/bundle.go; \
 
 build-agent: bundle-agent
 	mkdir -p $(BIN_DIR)
