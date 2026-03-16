@@ -520,10 +520,17 @@ func (p *Plan) simulateFirstMove(body []int, d int) (int, int) {
 	}
 	bodyLen := len(body)
 
+	// If stepping onto an apple, body grows (tail preserved).
+	eating := nc >= 0 && nc < g.OobBase && p.isApple(nc)
+	newLen := bodyLen
+	if eating && bodyLen < MaxSeg {
+		newLen = bodyLen + 1
+	}
+
 	// Use scratch buffer instead of allocating
-	newBody := p.firstMoveBuf[:bodyLen]
+	newBody := p.firstMoveBuf[:newLen]
 	newBody[0] = nc
-	for i := 1; i < bodyLen; i++ {
+	for i := 1; i < newLen; i++ {
 		newBody[i] = body[i-1]
 	}
 
@@ -580,8 +587,8 @@ func (p *Plan) BFSFindAll(body []int) []PathResult {
 		return nil
 	}
 	head := body[0]
-	if head < 0 {
-		return nil
+	if head < 0 || head >= n {
+		return nil // OOB or invalid head — can't BFS
 	}
 
 	maxAG := bodyLen
