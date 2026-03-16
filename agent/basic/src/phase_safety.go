@@ -30,14 +30,49 @@ func (d *Decision) phaseSafety() {
 		snIdx := d.MySnakes[si]
 		sn := &g.Sn[snIdx]
 		head := sn.Body[0]
-		if head < 0 || head >= n {
+		neck := neckOf(sn.Body)
+		ownTail := sn.Body[len(sn.Body)-1]
+
+		// OOB head: emergency — prefer directions back inside the map.
+		if head >= n {
+			if head < g.NCells {
+				bestDir := -1
+				bestPriority := -1
+				for dir := 0; dir < 4; dir++ {
+					nc := g.Nb[head][dir]
+					if nc == -1 || nc == neck {
+						continue
+					}
+					if nc >= 0 && nc < n && bodyCell[nc] && nc != ownTail {
+						continue
+					}
+					priority := 0
+					if nc >= 0 && nc < n {
+						priority = 2 // back inside map
+					} else {
+						priority = 1 // still OOB but alive
+					}
+					if priority > bestPriority {
+						bestPriority = priority
+						bestDir = dir
+					}
+				}
+				if bestDir >= 0 {
+					d.AssignedDir[si] = bestDir
+				}
+			}
 			for dir := 0; dir < 4; dir++ {
 				safeScore[si][dir] = -1
 			}
 			continue
 		}
-		neck := neckOf(sn.Body)
-		ownTail := sn.Body[len(sn.Body)-1]
+
+		if head < 0 {
+			for dir := 0; dir < 4; dir++ {
+				safeScore[si][dir] = -1
+			}
+			continue
+		}
 
 		bfs := d.BFS[si]
 

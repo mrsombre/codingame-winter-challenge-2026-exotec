@@ -13,41 +13,36 @@ func (d *Decision) phaseAssignment() {
 		d.AssignedDir[i] = DU // fallback
 	}
 
-	// Greedy global: pick best (snake, apple) pair each round.
-	// Score = BFS distance + penalty for apples the enemy reaches first.
-	claimed := make(map[int]bool)
+	// Greedy global: pick best (snake, apple) pair each round using
+	// precomputed scores from Phase 3 (higher = better target).
+	claimed := make([]bool, g.ANum)
 	for round := 0; round < n; round++ {
 		bestSI := -1
-		bestApple := -1
-		bestScore := MaxCells
+		bestJ := -1
+		bestScore := -1
 		bestDir := -1
 
 		for si := 0; si < n; si++ {
 			if d.Assigned[si] != -1 {
 				continue
 			}
-			results := d.BFS[si]
-			if results == nil {
+			bfs := d.BFS[si]
+			if bfs == nil {
 				continue
 			}
 			for j := 0; j < g.ANum; j++ {
-				ap := g.Ap[j]
-				if claimed[ap] {
+				if claimed[j] {
 					continue
 				}
-				r := results[ap]
-				if r.Dist < 0 {
+				score := d.Scores[si][j]
+				if score < 0 {
 					continue
 				}
-				score := r.Dist
-				if inf := d.Influence[ap]; inf < 0 && r.Dist > 2 {
-					score -= inf * 2 // penalize: enemy closer by |inf| turns
-				}
-				if score < bestScore {
+				if score > bestScore {
 					bestSI = si
-					bestApple = ap
+					bestJ = j
 					bestScore = score
-					bestDir = r.FirstDir
+					bestDir = bfs[g.Ap[j]].FirstDir
 				}
 			}
 		}
@@ -55,9 +50,9 @@ func (d *Decision) phaseAssignment() {
 		if bestSI == -1 {
 			break
 		}
-		d.Assigned[bestSI] = bestApple
+		d.Assigned[bestSI] = g.Ap[bestJ]
 		d.AssignedDir[bestSI] = bestDir
-		claimed[bestApple] = true
+		claimed[bestJ] = true
 	}
 
 	// Fallback for unassigned snakes: nearest reachable higher surface.

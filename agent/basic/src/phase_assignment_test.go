@@ -58,22 +58,14 @@ func TestAssignment_PrefersMyTerritory(t *testing.T) {
 		"only %d/%d assigned to my territory, want ≥2", myTerritory, len(d.Assigned))
 }
 
-// Verify influence penalty is applied to scoring.
-// Apple (9,9): raw BFS dist=6, influence=-3 → score=6+6=12 (penalized).
-// Without penalty the score would be 6. The penalty doubles the enemy lead.
-func TestAssignment_InfluencePenalty(t *testing.T) {
+// Verify BFS distance and influence values that feed into Phase 3 scoring.
+// Apple (9,9): BFS dist=6, influence=-3 (enemy territory).
+func TestAssignment_ScoringInputs(t *testing.T) {
 	g, _, d := testDecision()
 	d.phaseBFS()
 	d.phaseInfluence()
 
 	cell := g.Idx(9, 9)
-	rawDist := d.BFS[0][cell].Dist
-	inf := d.Influence[cell]
-
-	assert.Equal(t, 6, rawDist, "Snake 0 raw dist to (9,9)")
-	assert.Equal(t, -3, inf, "(9,9) influence")
-
-	// Effective score with penalty: dist + abs(inf)*2
-	expectedScore := rawDist + (-inf) * 2
-	assert.Equal(t, 12, expectedScore, "penalized score for (9,9)")
+	assert.Equal(t, 6, d.BFS[0][cell].Dist, "Snake 0 raw dist to (9,9)")
+	assert.Equal(t, -3, d.Influence[cell], "(9,9) influence")
 }

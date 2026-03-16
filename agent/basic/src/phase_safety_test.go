@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -111,4 +113,67 @@ func TestSafety_OverridesCollision(t *testing.T) {
 	// After safety, direction should be valid
 	assert.NotEqual(t, -1, nc, "post-safety direction should not hit wall")
 	assert.True(t, dir >= 0 && dir < 4, "valid direction")
+}
+
+// ============================================================
+// OOB head recovery
+// ============================================================
+
+// Snake with head outside the right map boundary must go LEFT to
+// re-enter the map, not UP (which stays OOB).
+//
+// Small 8×6 grid, right-bottom portion:
+//
+//   ........   y=0
+//   ........   y=1
+//   ........   y=2   ← snake head OOB at (8,2), body (8,3),(7,3)
+//   ........   y=3
+//   ..######   y=4
+//   ########   y=5
+//
+// From OOB (8,2):
+//   LEFT  → (7,2) free inside map  ← must pick this
+//   UP    → (8,1) still OOB
+//   DOWN  → (8,3) neck → blocked
+//   RIGHT → (9,2) 2-cells-out → -1
+func TestSafety_OOBHeadPrefersInsideMap(t *testing.T) {
+	input := strings.Join([]string{
+		"0",        // player ID
+		"8",        // W
+		"6",        // H
+		"........", // y=0
+		"........", // y=1
+		"........", // y=2
+		"........", // y=3
+		"..######", // y=4
+		"########", // y=5
+		"1",        // snakes per player
+		"0",        // my snake ID
+		"1",        // opponent snake ID
+		// Turn data
+		"1",               // 1 apple
+		"3 2",             // apple at (3,2)
+		"2",               // 2 snakes
+		"0 8,2:8,3:7,3",   // mine, head OOB right
+		"1 0,2:0,3:0,4",   // opponent inside
+	}, "\n")
+
+	s := bufio.NewScanner(strings.NewReader(input))
+	s.Buffer(make([]byte, 1000000), 1000000)
+	g := Init(s)
+	g.Read(s)
+
+	p := &Plan{g: g}
+	p.Precompute()
+	d := &Decision{G: g, P: p}
+
+	d.phaseBFS()
+	d.phaseInfluence()
+	d.phaseScoring()
+	d.phaseAssignment()
+	d.phaseSafety()
+
+	assert.Equal(t, 1, len(d.MySnakes), "should have 1 my snake")
+	assert.Equal(t, DL, d.AssignedDir[0],
+		"OOB head should go LEFT to re-enter map, got %s", Dn[d.AssignedDir[0]])
 }

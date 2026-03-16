@@ -31,7 +31,7 @@ const (
 	MaxASn = 8   // total snakes both players
 	MaxPSn = 4   // max snakes per player
 	MaxSeg = 256 // max body parts per snake
-	MaxAp  = 64  // max power sources (apples)
+	MaxAp  = 128 // max power sources (apples)
 	MaxAG  = 33  // max above-ground counter for BFS (capped for memory)
 )
 

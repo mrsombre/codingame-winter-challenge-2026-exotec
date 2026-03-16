@@ -33,6 +33,10 @@ type Decision struct {
 
 	Influence []int // per-cell Voronoi: positive = my lead in turns, negative = enemy lead
 
+	// Per-apple scoring: Scores[si][j] for my snake si → apple index j.
+	// Higher = better target. -1 = unreachable.
+	Scores [][]int
+
 	// Per-snake scoring: best apple cell and direction after assignment.
 	Assigned    []int // apple cell per MySnakes slot (-1 = none)
 	AssignedDir []int // first direction per MySnakes slot
