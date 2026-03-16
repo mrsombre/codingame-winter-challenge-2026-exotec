@@ -28,8 +28,10 @@ type Decision struct {
 	// Per-turn pipeline data, recomputed each Decide() call.
 	MySnakes []int          // indices into g.Sn for my alive snakes
 	BFS      [][]PathResult // BFS results per my snake (indexed same as MySnakes)
+	OpSnakes []int          // indices into g.Sn for enemy alive snakes
+	OpBFS    [][]PathResult // BFS results per enemy snake
 
-	Influence []int // per-cell influence map (positive=friendly, negative=enemy)
+	Influence []int // per-cell Voronoi: positive = my lead in turns, negative = enemy lead
 
 	// Per-snake scoring: best apple cell and direction after assignment.
 	Assigned    []int // apple cell per MySnakes slot (-1 = none)
@@ -54,24 +56,50 @@ func (d *Decision) phaseBFS() {
 
 	d.MySnakes = d.MySnakes[:0]
 	d.BFS = d.BFS[:0]
+	d.OpSnakes = d.OpSnakes[:0]
+	d.OpBFS = d.OpBFS[:0]
 
 	for i := 0; i < g.SNum; i++ {
 		sn := &g.Sn[i]
-		if sn.Owner != 0 || !sn.Alive || sn.Body[0] < 0 {
+		if !sn.Alive || sn.Body[0] < 0 {
 			continue
 		}
 		results := p.BFSFindAll(sn.Body)
-		d.MySnakes = append(d.MySnakes, i)
-		d.BFS = append(d.BFS, results)
+		if sn.Owner == 0 {
+			d.MySnakes = append(d.MySnakes, i)
+			d.BFS = append(d.BFS, results)
+		} else {
+			d.OpSnakes = append(d.OpSnakes, i)
+			d.OpBFS = append(d.OpBFS, results)
+		}
 	}
 }
 
 // --- Phase 2: Influence mapping ---
 
 func (d *Decision) phaseInfluence() {
-	// TODO: propagate positive influence from friendly agents,
-	// negative from opponents, with BFS-based distance decay.
-	// Identify safe zones, contested frontlines, opponent territory.
+	g := d.G
+	n := g.W * g.H
+
+	if len(d.Influence) < n {
+		d.Influence = make([]int, n)
+	}
+
+	for c := 0; c < n; c++ {
+		myBest := MaxCells
+		for _, bfs := range d.BFS {
+			if bfs != nil && bfs[c].Dist >= 0 && bfs[c].Dist < myBest {
+				myBest = bfs[c].Dist
+			}
+		}
+		opBest := MaxCells
+		for _, bfs := range d.OpBFS {
+			if bfs != nil && bfs[c].Dist >= 0 && bfs[c].Dist < opBest {
+				opBest = bfs[c].Dist
+			}
+		}
+		d.Influence[c] = opBest - myBest
+	}
 }
 
 // --- Phase 3: Resource scoring ---
@@ -97,12 +125,13 @@ func (d *Decision) phaseAssignment() {
 		d.AssignedDir[i] = DU // fallback
 	}
 
-	// Greedy global: pick closest (snake, apple) pair each round.
+	// Greedy global: pick best (snake, apple) pair each round.
+	// Score = BFS distance + penalty for apples the enemy reaches first.
 	claimed := make(map[int]bool)
 	for round := 0; round < n; round++ {
 		bestSI := -1
 		bestApple := -1
-		bestDist := MaxCells
+		bestScore := MaxCells
 		bestDir := -1
 
 		for si := 0; si < n; si++ {
@@ -119,10 +148,17 @@ func (d *Decision) phaseAssignment() {
 					continue
 				}
 				r := results[ap]
-				if r.Dist >= 0 && r.Dist < bestDist {
+				if r.Dist < 0 {
+					continue
+				}
+				score := r.Dist
+				if inf := d.Influence[ap]; inf < 0 {
+					score -= inf * 2 // penalize: enemy closer by |inf| turns
+				}
+				if score < bestScore {
 					bestSI = si
 					bestApple = ap
-					bestDist = r.Dist
+					bestScore = score
 					bestDir = r.FirstDir
 				}
 			}
