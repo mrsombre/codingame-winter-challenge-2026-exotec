@@ -6,7 +6,7 @@ import (
 	"os"
 )
 
-const debug = true
+var debug = true
 
 func log(a ...interface{}) {
 	if debug {

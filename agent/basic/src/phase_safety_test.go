@@ -124,18 +124,19 @@ func TestSafety_OverridesCollision(t *testing.T) {
 //
 // Small 8×6 grid, right-bottom portion:
 //
-//   ........   y=0
-//   ........   y=1
-//   ........   y=2   ← snake head OOB at (8,2), body (8,3),(7,3)
-//   ........   y=3
-//   ..######   y=4
-//   ########   y=5
+//	........   y=0
+//	........   y=1
+//	........   y=2   ← snake head OOB at (8,2), body (8,3),(7,3)
+//	........   y=3
+//	..######   y=4
+//	########   y=5
 //
 // From OOB (8,2):
-//   LEFT  → (7,2) free inside map  ← must pick this
-//   UP    → (8,1) still OOB
-//   DOWN  → (8,3) neck → blocked
-//   RIGHT → (9,2) 2-cells-out → -1
+//
+//	LEFT  → (7,2) free inside map  ← must pick this
+//	UP    → (8,1) still OOB
+//	DOWN  → (8,3) neck → blocked
+//	RIGHT → (9,2) 2-cells-out → -1
 func TestSafety_OOBHeadPrefersInsideMap(t *testing.T) {
 	input := strings.Join([]string{
 		"0",        // player ID
@@ -151,11 +152,11 @@ func TestSafety_OOBHeadPrefersInsideMap(t *testing.T) {
 		"0",        // my snake ID
 		"1",        // opponent snake ID
 		// Turn data
-		"1",               // 1 apple
-		"3 2",             // apple at (3,2)
-		"2",               // 2 snakes
-		"0 8,2:8,3:7,3",   // mine, head OOB right
-		"1 0,2:0,3:0,4",   // opponent inside
+		"1",             // 1 apple
+		"3 2",           // apple at (3,2)
+		"2",             // 2 snakes
+		"0 8,2:8,3:7,3", // mine, head OOB right
+		"1 0,2:0,3:0,4", // opponent inside
 	}, "\n")
 
 	s := bufio.NewScanner(strings.NewReader(input))
@@ -176,4 +177,47 @@ func TestSafety_OOBHeadPrefersInsideMap(t *testing.T) {
 	assert.Equal(t, 1, len(d.MySnakes), "should have 1 my snake")
 	assert.Equal(t, DL, d.AssignedDir[0],
 		"OOB head should go LEFT to re-enter map, got %s", Dn[d.AssignedDir[0]])
+}
+
+// Rollout should avoid a greedy apple chase that leads to a fatal head-on
+// collision in the next simulated move sequence.
+func TestSafety_RolloutAvoidsHeadOnDeath(t *testing.T) {
+	input := strings.Join([]string{
+		"0",
+		"5",
+		"5",
+		".....",
+		".....",
+		".....",
+		".....",
+		"#####",
+		"1",
+		"0",
+		"1",
+		"1",
+		"1 3",
+		"2",
+		"0 2,2:2,1:2,0",
+		"1 3,3:4,3:4,2:4,1",
+	}, "\n")
+
+	s := bufio.NewScanner(strings.NewReader(input))
+	s.Buffer(make([]byte, 1000000), 1000000)
+	g := Init(s)
+	g.Read(s)
+
+	p := &Plan{g: g}
+	p.Precompute()
+	d := &Decision{G: g, P: p}
+
+	d.phaseBFS()
+	d.phaseInfluence()
+	d.phaseScoring()
+	d.phaseAssignment()
+
+	d.AssignedDir[0] = DD // greedy move collides head-on at (2,3)
+	d.phaseSafety()
+
+	assert.NotEqual(t, DD, d.AssignedDir[0],
+		"rollout should avoid fatal head-on over the apple")
 }

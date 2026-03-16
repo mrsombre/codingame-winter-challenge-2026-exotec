@@ -54,7 +54,7 @@ type Plan struct {
 	visitGen     []uint16 // flat [cell*MaxAG + ag], generation counter
 	curGen       uint16
 	queue        []bfsNode
-	firstMoveBuf []int // scratch for simulateFirstMove
+	firstMoveBuf []int // scratch for single-snake move simulation
 }
 
 // Precompute fills LandY, surfaces, and the surface graph.
@@ -79,16 +79,16 @@ func (p *Plan) Precompute() {
 // RebuildAppleMap refreshes the apple bitmap from current game state.
 // Must be called before BFS each turn.
 func (p *Plan) RebuildAppleMap() {
-	g := p.g
+	p.rebuildAppleMapFrom(p.g.Ap[:p.g.ANum])
+}
+
+func (p *Plan) rebuildAppleMapFrom(apples []int) {
 	n := len(p.appleMap)
-	// Clear only previously set entries — O(ANum) not O(W×H)
 	for i := 0; i < p.appleMapN; i++ {
 		p.appleMap[p.appleMapPrev[i]] = false
 	}
-	// Set current apples
 	p.appleMapN = 0
-	for j := 0; j < g.ANum; j++ {
-		ap := g.Ap[j]
+	for _, ap := range apples {
 		if ap >= 0 && ap < n {
 			p.appleMap[ap] = true
 			p.appleMapPrev[p.appleMapN] = ap
@@ -510,28 +510,253 @@ func (p *Plan) initialAG(body []int) int {
 	return len(body)
 }
 
+// simulateMove applies engine-compatible movement for a single snake against
+// static walls, apples, and its own body. It resolves the move and beheading
+// but does not apply falling.
+func (p *Plan) simulateMove(body []int, d int) ([]int, bool) {
+	g := p.g
+	if len(body) == 0 {
+		return nil, false
+	}
+
+	hx, hy := g.CellXY(body[0])
+	nx := hx + Dl[d][0]
+	ny := hy + Dl[d][1]
+	newHead := g.CellIdx(nx, ny)
+
+	eating := newHead >= 0 && newHead < g.OobBase && p.isApple(newHead)
+	newLen := len(body)
+	if eating && newLen < MaxSeg {
+		newLen++
+	}
+
+	newBody := p.firstMoveBuf[:newLen]
+	newBody[0] = newHead
+	if eating {
+		copy(newBody[1:], body)
+	} else if len(body) > 1 {
+		copy(newBody[1:], body[:len(body)-1])
+	}
+
+	hitWall := newHead >= 0 && newHead < g.OobBase && !g.Cell[newHead]
+	hitBody := false
+	if newHead >= 0 {
+		for i := 1; i < newLen; i++ {
+			if newBody[i] == newHead {
+				hitBody = true
+				break
+			}
+		}
+	}
+
+	if hitWall || hitBody {
+		if newLen <= 3 {
+			return nil, false
+		}
+		return newBody[1:newLen], true
+	}
+
+	return newBody, true
+}
+
+func bodyContains(body []int, cell int) bool {
+	for _, part := range body {
+		if part == cell {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Plan) stepCell(cell int, d int) int {
+	if cell < 0 {
+		return -1
+	}
+	x, y := p.g.CellXY(cell)
+	return p.g.CellIdx(x+Dl[d][0], y+Dl[d][1])
+}
+
+func (p *Plan) hasTileOrAppleUnder(cell int, eaten []bool) bool {
+	if cell < 0 {
+		return false
+	}
+	below := p.stepCell(cell, DD)
+	if below >= 0 && below < p.g.OobBase {
+		if !p.g.Cell[below] {
+			return true
+		}
+		return p.appleMap[below] && !eaten[below]
+	}
+	return false
+}
+
+func (p *Plan) isGroundedForResolve(body []int, snakes []Snake, grounded []bool, eaten []bool) bool {
+	for _, cell := range body {
+		if p.hasTileOrAppleUnder(cell, eaten) {
+			return true
+		}
+		below := p.stepCell(cell, DD)
+		if below < 0 {
+			continue
+		}
+		for i := range snakes {
+			if !grounded[i] || !snakes[i].Alive {
+				continue
+			}
+			if bodyContains(snakes[i].Body, below) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (p *Plan) allOutOfBounds(body []int) bool {
+	for _, cell := range body {
+		if cell < 0 {
+			continue
+		}
+		_, y := p.g.CellXY(cell)
+		if y < p.g.H+1 {
+			return false
+		}
+	}
+	return true
+}
+
+// resolveMove resolves engine-compatible post-move state for all snakes and
+// returns the cells of apples eaten by moved heads this turn.
+// Input bodies must already reflect the simultaneous movement step:
+// head added, tail popped unless an apple was eaten.
+func (p *Plan) resolveMove(snakes []Snake) []int {
+	if len(snakes) == 0 {
+		return nil
+	}
+
+	p.RebuildAppleMap()
+	eaten := make([]bool, p.g.OobBase)
+	eatenList := make([]int, 0, len(snakes))
+	for i := range snakes {
+		if !snakes[i].Alive || len(snakes[i].Body) == 0 {
+			continue
+		}
+		head := snakes[i].Body[0]
+		if head >= 0 && head < p.g.OobBase && p.appleMap[head] {
+			if !eaten[head] {
+				eaten[head] = true
+				eatenList = append(eatenList, head)
+			}
+		}
+	}
+
+	toBehead := make([]bool, len(snakes))
+	for i := range snakes {
+		sn := &snakes[i]
+		if !sn.Alive || len(sn.Body) == 0 {
+			continue
+		}
+
+		head := sn.Body[0]
+		isInWall := head >= 0 && head < p.g.OobBase && !p.g.Cell[head]
+		isInBody := false
+
+		for j := range snakes {
+			other := &snakes[j]
+			if !other.Alive || len(other.Body) == 0 || !bodyContains(other.Body, head) {
+				continue
+			}
+			if i != j {
+				isInBody = true
+				break
+			}
+			if bodyContains(other.Body[1:], head) {
+				isInBody = true
+				break
+			}
+		}
+
+		if isInWall || isInBody {
+			toBehead[i] = true
+		}
+	}
+
+	for i := range snakes {
+		if !toBehead[i] {
+			continue
+		}
+		if len(snakes[i].Body) <= 3 {
+			snakes[i].Alive = false
+			snakes[i].Body = nil
+			snakes[i].Len = 0
+			continue
+		}
+		snakes[i].Body = snakes[i].Body[1:]
+		snakes[i].Len = len(snakes[i].Body)
+	}
+
+	airborne := make([]bool, len(snakes))
+	grounded := make([]bool, len(snakes))
+	for i := range snakes {
+		if snakes[i].Alive && len(snakes[i].Body) > 0 {
+			airborne[i] = true
+		}
+	}
+
+	for {
+		somethingFell := false
+		for {
+			somethingGotGrounded := false
+			for i := range snakes {
+				if !airborne[i] {
+					continue
+				}
+				if p.isGroundedForResolve(snakes[i].Body, snakes, grounded, eaten) {
+					grounded[i] = true
+					airborne[i] = false
+					somethingGotGrounded = true
+				}
+			}
+			if !somethingGotGrounded {
+				break
+			}
+		}
+
+		for i := range snakes {
+			if !airborne[i] {
+				continue
+			}
+			somethingFell = true
+			for bi, cell := range snakes[i].Body {
+				snakes[i].Body[bi] = p.stepCell(cell, DD)
+			}
+			if p.allOutOfBounds(snakes[i].Body) {
+				snakes[i].Alive = false
+				snakes[i].Body = nil
+				snakes[i].Len = 0
+				airborne[i] = false
+			}
+		}
+
+		if !somethingFell {
+			break
+		}
+	}
+
+	for i := range snakes {
+		if snakes[i].Alive {
+			snakes[i].Len = len(snakes[i].Body)
+		}
+	}
+	return eatenList
+}
+
 // simulateFirstMove computes the actual head position after moving in
-// direction d with full body simulation (accurate multi-column fall).
+// direction d with full body simulation (movement + falling).
 func (p *Plan) simulateFirstMove(body []int, d int) (int, int) {
 	g := p.g
-	nc := g.Nb[body[0]][d]
-	if nc == -1 {
+	newBody, alive := p.simulateMove(body, d)
+	if !alive || len(newBody) == 0 {
 		return -1, 0
-	}
-	bodyLen := len(body)
-
-	// If stepping onto an apple, body grows (tail preserved).
-	eating := nc >= 0 && nc < g.OobBase && p.isApple(nc)
-	newLen := bodyLen
-	if eating && bodyLen < MaxSeg {
-		newLen = bodyLen + 1
-	}
-
-	// Use scratch buffer instead of allocating
-	newBody := p.firstMoveBuf[:newLen]
-	newBody[0] = nc
-	for i := 1; i < newLen; i++ {
-		newBody[i] = body[i-1]
 	}
 
 	// Check if any segment is grounded
@@ -556,7 +781,7 @@ func (p *Plan) simulateFirstMove(body []int, d int) (int, int) {
 			}
 		}
 		if minDrop <= 0 {
-			return nc, p.initialAG(newBody)
+			return newBody[0], p.initialAG(newBody)
 		}
 		// Apply fall to all segments (grid + OOB)
 		for i, c := range newBody {
@@ -573,7 +798,7 @@ func (p *Plan) simulateFirstMove(body []int, d int) (int, int) {
 		return head, p.initialAG(newBody)
 	}
 
-	return nc, p.initialAG(newBody)
+	return newBody[0], p.initialAG(newBody)
 }
 
 // BFSFindAll runs a single BFS from the snake's head, exploring all reachable
