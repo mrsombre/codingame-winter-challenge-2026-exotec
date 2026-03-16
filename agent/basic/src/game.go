@@ -49,8 +49,9 @@ type Game struct {
 
 	W, H int
 	Cell []bool   // false = wall, true = free
-	Nb   [][4]int // precomputed neighbor index; -1 = blocked
-	Edge []bool   // wall with free cell above and free left or right neighbor
+	Nb      [][4]int // precomputed neighbor index; -1 = blocked
+	OobBase int      // start of OOB cell indices (= W*H)
+	NCells  int      // total cells including OOB border (= W*H + 2*W + 2*H)
 
 	MyIDs [MaxPSn]int // my snake IDs
 	MyN   int
@@ -79,9 +80,11 @@ func Init(s *bufio.Scanner) *Game {
 
 	w, h := g.W, g.H
 	n := w * h
+	g.OobBase = n
+	g.NCells = n + 2*w + 2*h
 	g.Cell = make([]bool, n)
-	g.Nb = make([][4]int, n)
-	for i := 0; i < n; i++ {
+	g.Nb = make([][4]int, g.NCells)
+	for i := 0; i < g.NCells; i++ {
 		g.Nb[i] = [4]int{-1, -1, -1, -1}
 	}
 
@@ -97,39 +100,20 @@ func Init(s *bufio.Scanner) *Game {
 		}
 	}
 
-	// precompute neighbors for all cells
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			idx := g.Idx(x, y)
-			for d := 0; d < 4; d++ {
-				nx := x + Dl[d][0]
-				ny := y + Dl[d][1]
-				if nx < 0 || nx >= w || ny < 0 || ny >= h {
-					continue
-				}
-				ni := g.Idx(nx, ny)
-				if !g.Cell[ni] {
-					continue
-				}
-				g.Nb[idx][d] = ni
+	// precompute neighbors for all cells (grid + OOB border)
+	for cell := 0; cell < g.NCells; cell++ {
+		cx, cy := g.CellXY(cell)
+		for d := 0; d < 4; d++ {
+			nx := cx + Dl[d][0]
+			ny := cy + Dl[d][1]
+			ni := g.CellIdx(nx, ny)
+			if ni < 0 {
+				continue
 			}
-		}
-	}
-
-	// precompute edges: wall cells with free above and free left or right
-	g.Edge = make([]bool, n)
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			idx := g.Idx(x, y)
-			if g.Cell[idx] {
-				continue // free cell, not a wall
+			if ni < g.OobBase && !g.Cell[ni] {
+				continue
 			}
-			if g.Nb[idx][DU] == -1 {
-				continue // no free cell above
-			}
-			if g.Nb[idx][DL] != -1 || g.Nb[idx][DR] != -1 {
-				g.Edge[idx] = true
-			}
+			g.Nb[cell][d] = ni
 		}
 	}
 
@@ -217,8 +201,72 @@ func (g *Game) Read(s *bufio.Scanner) {
 	}
 }
 
+// Manhattan returns the Manhattan distance between two cells.
+func (g *Game) Manhattan(a, b int) int {
+	ax, ay := g.XY(a)
+	bx, by := g.XY(b)
+	dx := ax - bx
+	if dx < 0 {
+		dx = -dx
+	}
+	dy := ay - by
+	if dy < 0 {
+		dy = -dy
+	}
+	return dx + dy
+}
+
+// OobIdx returns the cell index for an out-of-bounds border position.
+// Only positions exactly 1 cell outside the grid are supported.
+// Returns -1 for positions 2+ cells out.
+func (g *Game) OobIdx(x, y int) int {
+	if y == -1 && x >= 0 && x < g.W {
+		return g.OobBase + x
+	}
+	if y == g.H && x >= 0 && x < g.W {
+		return g.OobBase + g.W + x
+	}
+	if x == -1 && y >= 0 && y < g.H {
+		return g.OobBase + 2*g.W + y
+	}
+	if x == g.W && y >= 0 && y < g.H {
+		return g.OobBase + 2*g.W + g.H + y
+	}
+	return -1
+}
+
+// CellXY returns x, y for any cell (grid or OOB border).
+func (g *Game) CellXY(cell int) (int, int) {
+	if cell < g.OobBase {
+		return cell % g.W, cell / g.W
+	}
+	off := cell - g.OobBase
+	if off < g.W {
+		return off, -1
+	}
+	off -= g.W
+	if off < g.W {
+		return off, g.H
+	}
+	off -= g.W
+	if off < g.H {
+		return -1, off
+	}
+	off -= g.H
+	return g.W, off
+}
+
+// CellIdx returns the cell index for (x, y), grid or OOB border.
+// Returns -1 if out of supported range (2+ cells outside).
+func (g *Game) CellIdx(x, y int) int {
+	if x >= 0 && x < g.W && y >= 0 && y < g.H {
+		return g.Idx(x, y)
+	}
+	return g.OobIdx(x, y)
+}
+
 // ParseBody parses "x,y:x,y:x,y" into flat cell indices.
-// Segments with out-of-bounds coordinates are stored as -1.
+// OOB positions 1 cell outside get OOB cell indices; further out get -1.
 func (g *Game) ParseBody(s string) []int {
 	dst := make([]int, 0, 8)
 	i := 0
@@ -251,11 +299,7 @@ func (g *Game) ParseBody(s string) []int {
 			y = -y
 		}
 		i++ // skip ':'
-		if x < 0 || x >= g.W || y < 0 || y >= g.H {
-			dst = append(dst, -1) // sentinel for out-of-bounds
-		} else {
-			dst = append(dst, g.Idx(x, y))
-		}
+		dst = append(dst, g.CellIdx(x, y))
 	}
 	return dst
 }

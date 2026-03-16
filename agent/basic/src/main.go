@@ -19,7 +19,9 @@ func main() {
 	s.Buffer(make([]byte, 1000000), 1000000)
 
 	g := Init(s)
-	bot := &Decision{G: g}
+	p := &Plan{g: g}
+	p.Precompute()
+	bot := &Decision{G: g, P: p}
 
 	// first turn: read + precompute within 1s budget
 	g.Read(s)

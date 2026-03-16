@@ -136,7 +136,7 @@ func (d *Decision) phaseAssignment() {
 		claimed[bestApple] = true
 	}
 
-	// Fallback for unassigned snakes: nearest reachable higher edge.
+	// Fallback for unassigned snakes: nearest reachable higher surface.
 	for si := 0; si < n; si++ {
 		if d.Assigned[si] != -1 {
 			continue
@@ -150,20 +150,18 @@ func (d *Decision) phaseAssignment() {
 		_, hy := g.XY(head)
 
 		bestDist := MaxCells
-		for idx := 0; idx < g.W*g.H; idx++ {
-			if !g.Edge[idx] {
-				continue
+		for _, surf := range d.P.Surfs {
+			if surf.Y >= hy {
+				continue // not above head
 			}
-			_, ey := g.XY(idx)
-			aboveY := ey - 1
-			if aboveY < 0 || aboveY >= hy {
-				continue
-			}
-			target := g.Idx(idx%g.W, aboveY)
-			r := results[target]
-			if r.Dist >= 0 && r.Dist < bestDist {
-				bestDist = r.Dist
-				d.AssignedDir[si] = r.FirstDir
+			// Try left and right edges of the surface as targets
+			for _, x := range []int{surf.Left, surf.Right} {
+				target := g.Idx(x, surf.Y)
+				r := results[target]
+				if r.Dist >= 0 && r.Dist < bestDist {
+					bestDist = r.Dist
+					d.AssignedDir[si] = r.FirstDir
+				}
 			}
 		}
 	}

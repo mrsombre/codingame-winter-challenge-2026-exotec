@@ -104,56 +104,27 @@ func TestIsWall(t *testing.T) {
 func TestNeighbors(t *testing.T) {
 	g := testGame()
 
-	// W=22, Idx(x,y) = y*22 + x
+	// W=22, H=12, OobBase=264
+	// OOB layout: top(264+x), bottom(286+x), left(308+y), right(320+y)
 	tests := []struct {
 		name string
 		x, y int
 		want [4]int // [UP, RIGHT, DOWN, LEFT]
 	}{
-		{"corner top-left", 0, 0, [4]int{-1, 1, 22, -1}},
-		{"corner top-right", 21, 0, [4]int{-1, -1, 43, 20}},
-		{"corner bot-left", 0, 11, [4]int{-1, -1, -1, -1}},
-		{"corner bot-right", 21, 11, [4]int{-1, -1, -1, -1}},
-		// (10,1) all free neighbors
+		{"corner top-left", 0, 0, [4]int{264, 1, 22, 308}},
+		{"corner top-right", 21, 0, [4]int{285, 320, 43, 20}},
+		{"corner bot-left", 0, 11, [4]int{-1, -1, 286, 319}},
+		{"corner bot-right", 21, 11, [4]int{-1, 331, 307, -1}},
+		// (10,1) all free neighbors — unchanged
 		{"all free", 10, 1, [4]int{10, 33, 54, 31}},
-		// (10,11) all wall neighbors: row 11 all '#', (10,10)='#'
-		{"all walls", 10, 11, [4]int{-1, -1, -1, -1}},
+		// (10,11) wall: UP/RIGHT/LEFT walls, DOWN=OOB bottom border
+		{"wall with oob", 10, 11, [4]int{-1, -1, 296, -1}},
 		// (4,3)='#': UP=(4,2) free, RIGHT=(5,3) wall, DOWN=(4,4) free, LEFT=(3,3) free
 		{"mixed wall", 4, 3, [4]int{48, -1, 92, 69}},
 	}
 	for _, tt := range tests {
 		nb := g.Nb[g.Idx(tt.x, tt.y)]
 		assert.Equal(t, tt.want, nb, tt.name)
-	}
-}
-
-// --- Edge ---
-
-func TestEdge(t *testing.T) {
-	g := testGame()
-
-	tests := []struct {
-		name string
-		x, y int
-		want bool
-	}{
-		// free cell — never an edge
-		{"free cell", 0, 0, false},
-		// (4,3)='#': free above (4,2), free left (3,3) → edge
-		{"wall with free above and left", 4, 3, true},
-		// (5,3)='#': free above (5,2), free right (6,3) → edge
-		{"wall with free above and right", 5, 3, true},
-		// (0,4)='#': free above (0,3), no left (oob), free right (1,4) → edge
-		{"left border wall edge", 0, 4, true},
-		// (10,11)='#': above (10,10) is '#' → not edge
-		{"interior bottom wall", 10, 11, false},
-		// (0,5)='#': above (0,4) is '#' → not edge
-		{"wall below wall", 0, 5, false},
-		// (9,5)='#': above (9,4) is free, left (8,5) is free → edge
-		{"mid-row wall edge", 9, 5, true},
-	}
-	for _, tt := range tests {
-		assert.Equal(t, tt.want, g.Edge[g.Idx(tt.x, tt.y)], tt.name)
 	}
 }
 
