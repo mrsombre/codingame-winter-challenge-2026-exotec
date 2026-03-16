@@ -15,48 +15,38 @@ type Command struct {
 
 // String formats the command: "<id> <direction> [msg]" or "WAIT".
 func (c Command) String() string {
-	if c.Dir < 0 || c.Dir > 3 {
-		return "WAIT"
-	}
 	if c.Msg != "" {
-		return fmt.Sprintf("%d %s %s", c.ID, DirName[c.Dir], c.Msg)
+		return fmt.Sprintf("%d %s %s", c.ID, Dn[c.Dir], c.Msg)
 	}
-	return fmt.Sprintf("%d %s", c.ID, DirName[c.Dir])
+	return fmt.Sprintf("%d %s", c.ID, Dn[c.Dir])
 }
 
 // Decision is the top-level decision maker, initialized once with game state.
 type Decision struct {
-	State *State
-	Cmds  []Command
-	buf   strings.Builder
+	G *Game
+	P *Plan
 }
 
 // Decide computes commands and prints a single semicolon-separated line.
 func (d *Decision) Decide() {
-	d.Cmds = d.buildCommands()
-	if len(d.Cmds) == 0 {
+	var cmds []Command
+
+	if len(cmds) == 0 {
 		fmt.Println("WAIT")
 		return
 	}
-	d.buf.Reset()
-	for i, c := range d.Cmds {
-		if i > 0 {
-			d.buf.WriteByte(';')
-		}
-		d.buf.WriteString(c.String())
-	}
-	d.buf.WriteByte('\n')
-	os.Stdout.WriteString(d.buf.String())
-}
 
-func (d *Decision) buildCommands() []Command {
-	cmds := make([]Command, 0, d.State.MyN)
-	for i := 0; i < d.State.SNum; i++ {
-		s := &d.State.Sn[i]
-		if s.Owner != 0 || !s.Alive {
-			continue
+	// decide here (heuristics)
+
+	cmdo := make([]string, 0, len(cmds))
+	for _, c := range cmds {
+		if c.Msg != "" {
+			cmdo = append(cmdo, fmt.Sprintf("%d %s %s", c.ID, Dn[c.Dir], c.Msg))
+		} else {
+			cmdo = append(cmdo, fmt.Sprintf("%d %s", c.ID, Dn[c.Dir]))
 		}
-		cmds = append(cmds, Command{s.ID, -1, ""})
 	}
-	return cmds
+
+	cmd := strings.Join(cmdo, ";")
+	fmt.Fprintln(os.Stdout, cmd)
 }

@@ -18,17 +18,15 @@ func main() {
 	s := bufio.NewScanner(os.Stdin)
 	s.Buffer(make([]byte, 1000000), 1000000)
 
-	st := &State{}
-	SFI(s, st)
+	g := Init(s)
+	bot := &Decision{G: g}
 
-	bot := &Decision{State: st}
 	// first turn: read + precompute within 1s budget
-	RT(s, st)
-	// TODO: precompute here
+	g.Read(s)
 	bot.Decide()
 
 	for {
-		RT(s, st)
+		g.Read(s)
 		bot.Decide()
 	}
 }
