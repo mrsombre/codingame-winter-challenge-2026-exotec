@@ -32,6 +32,7 @@ const (
 	MaxPSn = 4   // max snakes per player
 	MaxSeg = 256 // max body parts per snake
 	MaxAp  = 64  // max power sources (apples)
+	MaxAG  = 33  // max above-ground counter for BFS (capped for memory)
 )
 
 // Snake holds one snake's current body as flat cell indices, head-first.
@@ -49,6 +50,7 @@ type Game struct {
 	W, H int
 	Cell []bool   // false = wall, true = free
 	Nb   [][4]int // precomputed neighbor index; -1 = blocked
+	Edge []bool   // wall with free cell above and free left or right neighbor
 
 	MyIDs [MaxPSn]int // my snake IDs
 	MyN   int
@@ -110,6 +112,23 @@ func Init(s *bufio.Scanner) *Game {
 					continue
 				}
 				g.Nb[idx][d] = ni
+			}
+		}
+	}
+
+	// precompute edges: wall cells with free above and free left or right
+	g.Edge = make([]bool, n)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			idx := g.Idx(x, y)
+			if g.Cell[idx] {
+				continue // free cell, not a wall
+			}
+			if g.Nb[idx][DU] == -1 {
+				continue // no free cell above
+			}
+			if g.Nb[idx][DL] != -1 || g.Nb[idx][DR] != -1 {
+				g.Edge[idx] = true
 			}
 		}
 	}
@@ -199,23 +218,44 @@ func (g *Game) Read(s *bufio.Scanner) {
 }
 
 // ParseBody parses "x,y:x,y:x,y" into flat cell indices.
+// Segments with out-of-bounds coordinates are stored as -1.
 func (g *Game) ParseBody(s string) []int {
 	dst := make([]int, 0, 8)
 	i := 0
 	for i < len(s) {
+		neg := false
+		if i < len(s) && s[i] == '-' {
+			neg = true
+			i++
+		}
 		x := 0
 		for i < len(s) && s[i] != ',' {
 			x = x*10 + int(s[i]-'0')
 			i++
 		}
+		if neg {
+			x = -x
+		}
 		i++ // skip ','
+		neg = false
+		if i < len(s) && s[i] == '-' {
+			neg = true
+			i++
+		}
 		y := 0
 		for i < len(s) && s[i] != ':' {
 			y = y*10 + int(s[i]-'0')
 			i++
 		}
+		if neg {
+			y = -y
+		}
 		i++ // skip ':'
-		dst = append(dst, g.Idx(x, y))
+		if x < 0 || x >= g.W || y < 0 || y >= g.H {
+			dst = append(dst, -1) // sentinel for out-of-bounds
+		} else {
+			dst = append(dst, g.Idx(x, y))
+		}
 	}
 	return dst
 }

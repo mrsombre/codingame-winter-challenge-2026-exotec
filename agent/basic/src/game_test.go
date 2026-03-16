@@ -127,6 +127,36 @@ func TestNeighbors(t *testing.T) {
 	}
 }
 
+// --- Edge ---
+
+func TestEdge(t *testing.T) {
+	g := testGame()
+
+	tests := []struct {
+		name string
+		x, y int
+		want bool
+	}{
+		// free cell — never an edge
+		{"free cell", 0, 0, false},
+		// (4,3)='#': free above (4,2), free left (3,3) → edge
+		{"wall with free above and left", 4, 3, true},
+		// (5,3)='#': free above (5,2), free right (6,3) → edge
+		{"wall with free above and right", 5, 3, true},
+		// (0,4)='#': free above (0,3), no left (oob), free right (1,4) → edge
+		{"left border wall edge", 0, 4, true},
+		// (10,11)='#': above (10,10) is '#' → not edge
+		{"interior bottom wall", 10, 11, false},
+		// (0,5)='#': above (0,4) is '#' → not edge
+		{"wall below wall", 0, 5, false},
+		// (9,5)='#': above (9,4) is free, left (8,5) is free → edge
+		{"mid-row wall edge", 9, 5, true},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, g.Edge[g.Idx(tt.x, tt.y)], tt.name)
+	}
+}
+
 // --- XY ---
 
 func TestIdxXYRoundtrip(t *testing.T) {
