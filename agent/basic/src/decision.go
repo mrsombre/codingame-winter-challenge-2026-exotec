@@ -26,81 +26,16 @@ type Decision struct {
 	P *Plan
 
 	// Per-turn pipeline data, recomputed each Decide() call.
-	MySnakes []int          // indices into g.Sn for my alive snakes
-	BFS      [][]PathResult // BFS results per my snake (indexed same as MySnakes)
-	OpSnakes []int          // indices into g.Sn for enemy alive snakes
-	OpBFS    [][]PathResult // BFS results per enemy snake
-
-	Influence []int // per-cell Voronoi: positive = my lead in turns, negative = enemy lead
-
-	// Per-apple scoring: Scores[si][j] for my snake si → apple index j.
-	// Higher = better target. -1 = unreachable.
-	Scores [][]int
+	MySnakes []int // indices into g.Sn for my alive snakes
+	OpSnakes []int // indices into g.Sn for enemy alive snakes
 
 	// Per-snake scoring: best apple cell and direction after assignment.
 	Assigned    []int // apple cell per MySnakes slot (-1 = none)
 	AssignedDir []int // first direction per MySnakes slot
-
-	// SimBFS: physically reachable apple targets per my snake.
-	SimTargets [][]SimTarget
-
-	// Body bitmap: true for cells occupied by any alive snake body.
-	BodyMap []bool
-}
-
-// buildBodyMap builds a bitmap of all cells occupied by alive snake bodies.
-func (d *Decision) buildBodyMap() {
-	g := d.G
-	n := g.NCells
-	if len(d.BodyMap) < n {
-		d.BodyMap = make([]bool, n)
-	} else {
-		for i := range d.BodyMap[:n] {
-			d.BodyMap[i] = false
-		}
-	}
-	for i := 0; i < g.SNum; i++ {
-		sn := &g.Sn[i]
-		if !sn.Alive {
-			continue
-		}
-		for _, c := range sn.Body {
-			if c >= 0 && c < n {
-				d.BodyMap[c] = true
-			}
-		}
-	}
-}
-
-// ValidDirs returns valid move directions for a snake: not wall, not neck,
-// not occupied by any body (except own tail which retracts).
-func (d *Decision) ValidDirs(body []int) [4]bool {
-	g := d.G
-	n := g.NCells
-	head := body[0]
-	neck := neckOf(body)
-	tail := body[len(body)-1]
-	hasBodyMap := len(d.BodyMap) >= n
-	var ok [4]bool
-	for dir := 0; dir < 4; dir++ {
-		nc := g.Nbm[head][dir]
-		if nc == -1 || nc == neck {
-			continue
-		}
-		if nc >= 0 && nc < n && !g.Cell[nc] {
-			continue // wall
-		}
-		if hasBodyMap && nc >= 0 && nc < n && d.BodyMap[nc] && nc != tail {
-			continue // body collision
-		}
-		ok[dir] = true
-	}
-	return ok
 }
 
 // Decide runs the full pipeline and prints one line of commands.
 func (d *Decision) Decide() {
-	d.buildBodyMap()
 	d.phaseBFS()
 	d.phaseInfluence()
 	d.phaseScoring()

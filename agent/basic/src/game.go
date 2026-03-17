@@ -46,6 +46,24 @@ type Snake struct {
 	Alive bool
 }
 
+// Surface represents a horizontal platform segment where snakes can walk.
+type Surface struct {
+	ID    int
+	Y     int // y of the walkable cells
+	Left  int // leftmost x
+	Right int // rightmost x
+	Len   int // Right - Left + 1
+}
+
+// SurfLink represents a directed connection between two surfaces.
+type SurfLink struct {
+	To      int // target surface index
+	Cost    int // Manhattan distance between edge cells
+	MinBody int // = Cost (body length to bridge, anchor excluded)
+	From    int // source edge cell index
+	ToCell  int // target edge cell index
+}
+
 type Game struct {
 	ID int
 
@@ -56,6 +74,11 @@ type Game struct {
 	Nbm    [][4]int // valid moves: not wall, in bounds; -1 = blocked (sized NCells)
 	NCells int      // (W+2) * (H+2)
 	InGrid []bool   // true for game-grid cells, false for border cells
+
+	// Static map precomputation
+	Surfs   []Surface
+	SurfAt  []int // cell -> surface index (-1 if not on surface)
+	SurfAdj [][]SurfLink
 
 	MyIDs [MaxPSn]int // my snake IDs
 	MyN   int
@@ -125,6 +148,7 @@ func Init(s *bufio.Scanner) *Game {
 			}
 		}
 	}
+	g.precomputeStaticMap()
 
 	var sp int
 	s.Scan()
@@ -243,4 +267,152 @@ func (g *Game) Manhattan(a, b int) int {
 		dy = -dy
 	}
 	return dx + dy
+}
+
+func (g *Game) precomputeStaticMap() {
+	g.SurfAt = make([]int, g.NCells)
+	g.detectSurfaces()
+	g.buildSurfaceGraph()
+}
+
+// --- Surface detection (uses wall-only grounding for static surfaces) ---
+
+func (g *Game) detectSurfaces() {
+	for i := range g.SurfAt {
+		g.SurfAt[i] = -1
+	}
+	g.Surfs = g.Surfs[:0]
+
+	for y := 0; y < g.H; y++ {
+		inSurf := false
+		var cur Surface
+		for x := 0; x < g.W; x++ {
+			idx := g.Idx(x, y)
+			// Static grounding: wall-only (no apples — surfaces are static)
+			grounded := g.Cell[idx] && (y+1 >= g.H || !g.Cell[idx+g.Stride])
+			if grounded {
+				if !inSurf {
+					cur = Surface{ID: len(g.Surfs), Y: y, Left: x, Right: x}
+					inSurf = true
+				} else {
+					cur.Right = x
+				}
+			} else if inSurf {
+				g.addSurface(cur)
+				inSurf = false
+			}
+		}
+		if inSurf {
+			g.addSurface(cur)
+		}
+	}
+}
+
+func (g *Game) addSurface(s Surface) {
+	s.Len = s.Right - s.Left + 1
+	g.Surfs = append(g.Surfs, s)
+	for x := s.Left; x <= s.Right; x++ {
+		g.SurfAt[g.Idx(x, s.Y)] = s.ID
+	}
+}
+
+// --- Surface graph ---
+
+const maxLinkDist = 5 // prune connections with Manhattan > 5
+
+// betweenRect returns true if cell g lies strictly inside the bounding
+// rectangle of a→b and is strictly closer to a than b is.
+func betweenRect(g *Game, a, b, c int) bool {
+	ax, ay := g.XY(a)
+	bx, by := g.XY(b)
+	cx, cy := g.XY(c)
+	minX, maxX := ax, bx
+	if minX > maxX {
+		minX, maxX = maxX, minX
+	}
+	minY, maxY := ay, by
+	if minY > maxY {
+		minY, maxY = maxY, minY
+	}
+	if cx < minX || cx > maxX || cy < minY || cy > maxY {
+		return false
+	}
+	if cx == ax && cy == ay {
+		return false
+	}
+	return g.Manhattan(a, c) < g.Manhattan(a, b)
+}
+
+func (g *Game) buildSurfaceGraph() {
+	n := len(g.Surfs)
+	g.SurfAdj = make([][]SurfLink, n)
+
+	type edgeCell struct {
+		surfID int
+		cell   int
+	}
+	var edges []edgeCell
+	for i := 0; i < n; i++ {
+		s := &g.Surfs[i]
+		edges = append(edges, edgeCell{i, g.Idx(s.Left, s.Y)})
+		if s.Right != s.Left {
+			edges = append(edges, edgeCell{i, g.Idx(s.Right, s.Y)})
+		}
+	}
+
+	type candidate struct {
+		from, to         int
+		fromCell, toCell int
+		dist             int
+	}
+
+	best := make([]candidate, n*n)
+	for i := range best {
+		best[i].dist = maxLinkDist + 1
+	}
+
+	for i := 0; i < len(edges); i++ {
+		for j := 0; j < len(edges); j++ {
+			ei, ej := edges[i], edges[j]
+			if ei.surfID == ej.surfID {
+				continue
+			}
+			d := g.Manhattan(ei.cell, ej.cell)
+			if d > maxLinkDist {
+				continue
+			}
+			key := ei.surfID*n + ej.surfID
+			if d < best[key].dist {
+				best[key] = candidate{ei.surfID, ej.surfID, ei.cell, ej.cell, d}
+			}
+		}
+	}
+
+	for i := range best {
+		c := &best[i]
+		if c.dist > maxLinkDist {
+			continue
+		}
+		for k := 0; k < len(edges); k++ {
+			ek := edges[k]
+			if ek.surfID == c.from || ek.surfID == c.to {
+				continue
+			}
+			if betweenRect(g, c.fromCell, c.toCell, ek.cell) {
+				c.dist = maxLinkDist + 1
+				break
+			}
+		}
+	}
+
+	for i := range best {
+		c := best[i]
+		if c.dist > maxLinkDist {
+			continue
+		}
+		g.SurfAdj[c.from] = append(g.SurfAdj[c.from], SurfLink{
+			To: c.to, Cost: c.dist, MinBody: c.dist,
+			From: c.fromCell, ToCell: c.toCell,
+		})
+	}
 }

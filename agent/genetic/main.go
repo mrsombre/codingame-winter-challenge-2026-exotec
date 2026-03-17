@@ -117,11 +117,27 @@ const MaxCells = 44 * 24
 
 type BitGrid [MaxCells/64 + 1]uint64
 
-func inBounds(p Pt) bool         { return p.x >= 0 && p.x < gridW && p.y >= 0 && p.y < gridH }
-func cellIdx(p Pt) int           { return p.y*gridW + p.x }
-func (g *BitGrid) set(p Pt)      { if inBounds(p) { i := cellIdx(p); g[i/64] |= 1 << uint(i%64) } }
-func (g *BitGrid) clear(p Pt)    { if inBounds(p) { i := cellIdx(p); g[i/64] &^= 1 << uint(i%64) } }
-func (g *BitGrid) has(p Pt) bool { if !inBounds(p) { return false }; i := cellIdx(p); return g[i/64]&(1<<uint(i%64)) != 0 }
+func inBounds(p Pt) bool { return p.x >= 0 && p.x < gridW && p.y >= 0 && p.y < gridH }
+func cellIdx(p Pt) int   { return p.y*gridW + p.x }
+func (g *BitGrid) set(p Pt) {
+	if inBounds(p) {
+		i := cellIdx(p)
+		g[i/64] |= 1 << uint(i%64)
+	}
+}
+func (g *BitGrid) clear(p Pt) {
+	if inBounds(p) {
+		i := cellIdx(p)
+		g[i/64] &^= 1 << uint(i%64)
+	}
+}
+func (g *BitGrid) has(p Pt) bool {
+	if !inBounds(p) {
+		return false
+	}
+	i := cellIdx(p)
+	return g[i/64]&(1<<uint(i%64)) != 0
+}
 
 // ---------------------------------------------------------------------------
 // Simulation state

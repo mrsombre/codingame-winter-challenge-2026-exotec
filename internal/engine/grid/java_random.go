@@ -18,7 +18,7 @@ func NewJavaRandom(seed int64) *JavaRandom {
 }
 
 func (r *JavaRandom) next(bits int) int32 {
-	r.seed = (r.seed*jrMultiplier+jrAddend) & jrMask
+	r.seed = (r.seed*jrMultiplier + jrAddend) & jrMask
 	return int32(uint64(r.seed) >> uint(48-bits))
 }
 

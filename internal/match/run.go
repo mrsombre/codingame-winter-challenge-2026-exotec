@@ -16,13 +16,13 @@ type runnerOutput struct {
 }
 
 type runnerMetadata struct {
-	Simulations   int     `json:"simulations"`
-	Parallel      int     `json:"parallel"`
-	Seed          int64   `json:"seed"`
-	SeedIncrement *int64  `json:"seed_increment,omitempty"`
-	OutputMatches bool    `json:"output_matches"`
-	MaxTurns      int     `json:"max_turns"`
-	LeagueLevel   int     `json:"league_level"`
+	Simulations   int    `json:"simulations"`
+	Parallel      int    `json:"parallel"`
+	Seed          int64  `json:"seed"`
+	SeedIncrement *int64 `json:"seed_increment,omitempty"`
+	OutputMatches bool   `json:"output_matches"`
+	MaxTurns      int    `json:"max_turns"`
+	LeagueLevel   int    `json:"league_level"`
 }
 
 func Run(args []string, stdout io.Writer) error {

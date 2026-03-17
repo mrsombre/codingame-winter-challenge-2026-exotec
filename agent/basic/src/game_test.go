@@ -92,7 +92,7 @@ func TestDirName(t *testing.T) {
 // --- Init ---
 
 func TestInit(t *testing.T) {
-	g := testGameFull()
+	g := testGame()
 
 	// grid dimensions: 28x15
 	assert.Equal(t, 28, g.W)
@@ -107,22 +107,6 @@ func TestInit(t *testing.T) {
 	assert.Equal(t, 3, g.OpIDs[0])
 	assert.Equal(t, 4, g.OpIDs[1])
 	assert.Equal(t, 5, g.OpIDs[2])
-
-	// apples
-	assert.Equal(t, 30, g.ANum)
-	assert.Equal(t, g.Idx(20, 9), g.Ap[0])
-	assert.Equal(t, g.Idx(18, 11), g.Ap[g.ANum-1])
-
-	// snakes
-	assert.Equal(t, 6, g.SNum)
-	assert.Equal(t, 0, g.Sn[0].ID)
-	assert.Equal(t, 0, g.Sn[0].Owner)
-	assert.Equal(t, 3, g.Sn[0].Len)
-	assert.Equal(t, g.Idx(16, 10), g.Sn[0].Body[0])
-	assert.Equal(t, 5, g.Sn[5].ID)
-	assert.Equal(t, 1, g.Sn[5].Owner)
-	assert.Equal(t, 3, g.Sn[5].Len)
-	assert.Equal(t, g.Idx(22, 6), g.Sn[5].Body[0])
 }
 
 func TestIsWall(t *testing.T) {
@@ -196,16 +180,77 @@ func TestNeighbors(t *testing.T) {
 	}
 }
 
+func TestSurfaces(t *testing.T) {
+	g := testGame(-9093555897832026000, 3)
+
+	assert.True(t, len(g.Surfs) > 0, "should detect surfaces")
+
+	// SurfAt consistency: every surface cell maps back to its surface ID
+	for id, s := range g.Surfs {
+		for x := s.Left; x <= s.Right; x++ {
+			cell := g.Idx(x, s.Y)
+			assert.Equal(t, id, g.SurfAt[cell], "SurfAt(%d,%d)", x, s.Y)
+		}
+	}
+
+	assert.Equal(t, 57, len(g.Surfs), "surface count")
+
+	// spot-check surfaces of different lengths
+	tests := []struct {
+		id                  int
+		y, left, right, len int
+	}{
+		{0, 0, 9, 9, 1},     // single cell above wall at (9,1)
+		{29, 10, 7, 8, 2},   // 2-cell ledge above walls at y=11
+		{53, 16, 12, 14, 3}, // 3-cell platform above bottom row
+		{34, 11, 15, 16, 2}, // 2-cell platform above ## at y=12
+		{51, 16, 0, 0, 1},   // single cell bottom-left corner
+		{25, 9, 12, 12, 1},  // single cell above wall at (12,10)
+	}
+	for _, tt := range tests {
+		s := g.Surfs[tt.id]
+		assert.Equal(t, tt.y, s.Y, "S%d Y", tt.id)
+		assert.Equal(t, tt.left, s.Left, "S%d Left", tt.id)
+		assert.Equal(t, tt.right, s.Right, "S%d Right", tt.id)
+		assert.Equal(t, tt.len, s.Len, "S%d Len", tt.id)
+	}
+
+	// symmetry: every link has a reverse
+	for i, links := range g.SurfAdj {
+		for _, l := range links {
+			assert.True(t, hasLink(g.SurfAdj[l.To], i, l.Cost, l.MinBody),
+				"S%d→S%d cost=%d missing reverse", i, l.To, l.Cost)
+		}
+	}
+}
+
+func hasLink(adj []SurfLink, to, cost, minBody int) bool {
+	for _, l := range adj {
+		if l.To == to && l.Cost == cost && l.MinBody == minBody {
+			return true
+		}
+	}
+	return false
+}
+
 // --- Turn ---
 
 func TestTurn(t *testing.T) {
-	g := testGameFull()
+	g := testGameFull(testSeed, int64(testLeague))
 
 	// verify initial state from engine (new 28x15 map has 30 apples)
 	assert.Equal(t, 30, g.ANum)
 	assert.Equal(t, 6, g.SNum)
 	assert.Equal(t, 3, g.Sn[0].Len)
 	assert.Equal(t, 3, g.Sn[5].Len)
+	assert.Equal(t, g.Idx(20, 9), g.Ap[0])
+	assert.Equal(t, g.Idx(18, 11), g.Ap[g.ANum-1])
+	assert.Equal(t, 0, g.Sn[0].ID)
+	assert.Equal(t, 0, g.Sn[0].Owner)
+	assert.Equal(t, g.Idx(16, 10), g.Sn[0].Body[0])
+	assert.Equal(t, 5, g.Sn[5].ID)
+	assert.Equal(t, 1, g.Sn[5].Owner)
+	assert.Equal(t, g.Idx(22, 6), g.Sn[5].Body[0])
 
 	// simulate second turn: snake 0 grew, some apples eaten
 	turn2 := strings.Join([]string{
@@ -354,5 +399,35 @@ func TestIsMy(t *testing.T) {
 	}
 	for _, tt := range tests {
 		assert.Equal(t, tt.want, g.IsMy(tt.id), "IsMy(%d)", tt.id)
+	}
+}
+
+// --- Manhattan ---
+
+func TestManhattan(t *testing.T) {
+	g := testGridInput([]string{
+		".....",
+		".....",
+		".....",
+		".....",
+	})
+
+	tests := []struct {
+		name     string
+		x1, y1   int
+		x2, y2   int
+		wantDist int
+	}{
+		{"same cell", 2, 1, 2, 1, 0},
+		{"horizontal", 0, 0, 4, 0, 4},
+		{"vertical", 1, 0, 1, 3, 3},
+		{"diagonal", 0, 0, 4, 3, 7},
+		{"adjacent", 2, 2, 3, 2, 1},
+	}
+	for _, tt := range tests {
+		a := g.Idx(tt.x1, tt.y1)
+		b := g.Idx(tt.x2, tt.y2)
+		assert.Equal(t, tt.wantDist, g.Manhattan(a, b), tt.name)
+		assert.Equal(t, tt.wantDist, g.Manhattan(b, a), tt.name+" reversed")
 	}
 }
