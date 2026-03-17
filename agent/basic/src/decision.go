@@ -32,6 +32,8 @@ type Decision struct {
 	// Per-snake scoring: best apple cell and direction after assignment.
 	Assigned    []int // apple cell per MySnakes slot (-1 = none)
 	AssignedDir []int // first direction per MySnakes slot
+
+	BFS BFSResult
 }
 
 // Decide runs the full pipeline and prints one line of commands.

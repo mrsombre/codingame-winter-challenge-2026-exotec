@@ -17,10 +17,12 @@ function layerDefault(key, { snakeMap }) {
 }
 
 // Layer: surfaces
-function layerSurfaces(key, { surfMap, linkPathSet }) {
+function layerSurfaces(key, { surfMap, linkPathSet, appleLinkPathSet, appleLinkDotSet }) {
   const surfId = surfMap[key]
   const isSurf = surfId !== undefined
   const isPath = linkPathSet.has(key)
+  const isAppleLinkPath = appleLinkPathSet.has(key)
+  const isAppleLinkDot = appleLinkDotSet.has(key)
 
   const outline = isSurf
     ? { outline: '2px dashed rgba(168,85,247,0.7)', outlineOffset: '-2px' }
@@ -36,6 +38,16 @@ function layerSurfaces(key, { surfMap, linkPathSet }) {
       {isPath && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
           <div className="w-[40%] h-[40%] rounded-full bg-orange-400 opacity-80" />
+        </div>
+      )}
+      {isAppleLinkPath && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
+          <div className="w-[28%] h-[28%] rounded-full bg-red-500 opacity-80" />
+        </div>
+      )}
+      {isAppleLinkDot && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
+          <div className="w-[58%] h-[58%] rounded-full border-2 border-red-600 bg-red-300/80" />
         </div>
       )}
     </>
@@ -80,6 +92,8 @@ export default function App() {
 
   // Build link path overlay for hovered surface
   const linkPathSet = new Set()
+  const appleLinkPathSet = new Set()
+  const appleLinkDotSet = new Set()
   if (showSurfaces && hover) {
     const sid = surfMap[`${hover.x},${hover.y}`]
     if (sid !== undefined) {
@@ -89,11 +103,17 @@ export default function App() {
           linkPathSet.add(`${p.x},${p.y}`)
         }
       }
+      for (const l of s.appleLinks ?? []) {
+        for (const p of l.path) {
+          appleLinkPathSet.add(`${p.x},${p.y}`)
+        }
+        appleLinkDotSet.add(`${l.apple.x},${l.apple.y}`)
+      }
     }
   }
 
   // Pick active layer
-  const layerCtx = { appleSet, snakeMap, surfMap, linkPathSet }
+  const layerCtx = { appleSet, snakeMap, surfMap, linkPathSet, appleLinkPathSet, appleLinkDotSet }
   const renderLayer = showSurfaces ? layerSurfaces : layerDefault
 
   return (
@@ -183,6 +203,9 @@ export default function App() {
           <div className="flex items-center gap-1"><div className="w-3 h-3 bg-yellow-400" /> apple</div>
           <div className="flex items-center gap-1"><div className="w-3 h-3 bg-purple-500 rounded-full" /> p0</div>
           <div className="flex items-center gap-1"><div className="w-3 h-3 bg-green-500 rounded-full" /> p1</div>
+          <div className="flex items-center gap-1"><div className="w-3 h-3 bg-orange-400 rounded-full" /> surface path</div>
+          <div className="flex items-center gap-1"><div className="w-3 h-3 bg-red-500 rounded-full" /> apple path</div>
+          <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full border-2 border-red-600 bg-red-300/80" /> apple target</div>
         </div>
         <Button
           variant={showSurfaces ? 'default' : 'outline'}
@@ -203,10 +226,18 @@ export default function App() {
                   <p>y: {s.y} x: {s.left}..{s.right} len: {s.len}</p>
                   <p>edges: ({s.left},{s.y}){s.len > 1 ? ` (${s.right},${s.y})` : ''}</p>
                   <p>links: {s.links.length}</p>
+                  <p>apple links: {s.appleLinks?.length ?? 0}</p>
                   {s.links.length > 0 && (
                     <div className="mt-1 text-[11px]">
                       {s.links.map((l, i) => (
                         <p key={i}>→ S{l.to} d={l.len}</p>
+                      ))}
+                    </div>
+                  )}
+                  {(s.appleLinks?.length ?? 0) > 0 && (
+                    <div className="mt-2 text-[11px] text-red-400">
+                      {s.appleLinks.map((l, i) => (
+                        <p key={i}>• A({l.apple.x},{l.apple.y}) d={l.len} from ({l.start.x},{l.start.y})</p>
                       ))}
                     </div>
                   )}

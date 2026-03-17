@@ -34,7 +34,7 @@ func debugWriteJSON(t *testing.T, name string, v any) {
 
 func TestPrintMap(t *testing.T) {
 	g := testGameFull(debugSeed, int64(debugLeague))
-	g.InitAppleSurfaces()
+	g.BuildSurfaceGraph()
 
 	type LinkJSON struct {
 		To      int          `json:"to"`
@@ -43,14 +43,22 @@ func TestPrintMap(t *testing.T) {
 		Path    []debugCoord `json:"path"`
 	}
 
+	type AppleLinkJSON struct {
+		Apple debugCoord   `json:"apple"`
+		Start debugCoord   `json:"start"`
+		Len   int          `json:"len"`
+		Path  []debugCoord `json:"path"`
+	}
+
 	type SurfJSON struct {
-		ID    int        `json:"id"`
-		Y     int        `json:"y"`
-		Left  int        `json:"left"`
-		Right int        `json:"right"`
-		Len   int        `json:"len"`
-		Type  string     `json:"type"`
-		Links []LinkJSON `json:"links"`
+		ID         int             `json:"id"`
+		Y          int             `json:"y"`
+		Left       int             `json:"left"`
+		Right      int             `json:"right"`
+		Len        int             `json:"len"`
+		Type       string          `json:"type"`
+		Links      []LinkJSON      `json:"links"`
+		AppleLinks []AppleLinkJSON `json:"appleLinks"`
 	}
 
 	type SnakeJSON struct {
@@ -112,6 +120,19 @@ func TestPrintMap(t *testing.T) {
 				Path:    path,
 			}
 		}
+		appleLinks := make([]AppleLinkJSON, len(s.Apples))
+		for j, l := range s.Apples {
+			path := make([]debugCoord, len(l.Path))
+			for k, cell := range l.Path {
+				path[k] = toCoord(cell)
+			}
+			appleLinks[j] = AppleLinkJSON{
+				Apple: toCoord(l.Apple),
+				Start: toCoord(l.Start),
+				Len:   l.Len,
+				Path:  path,
+			}
+		}
 		stype := "solid"
 		if s.Type == SurfApple {
 			stype = "apple"
@@ -126,6 +147,7 @@ func TestPrintMap(t *testing.T) {
 			Len:   s.Len,
 			Type:  stype,
 			Links: links,
+			AppleLinks: appleLinks,
 		}
 	}
 
@@ -162,13 +184,21 @@ func TestPrintSurfaces(t *testing.T) {
 		Path []debugCoord `json:"path"`
 	}
 
+	type AppleLinkJSON struct {
+		From  int          `json:"from"`  // source surface ID
+		Apple debugCoord   `json:"apple"` // target apple coord
+		Start debugCoord   `json:"start"` // source surface coord
+		Path  []debugCoord `json:"path"`
+	}
+
 	type SurfMapJSON struct {
-		W        int        `json:"w"`
-		H        int        `json:"h"`
-		Walls    []debugCoord `json:"walls"`
-		Cells    []CellJSON `json:"cells"`    // all surface cells with their surface ID
-		Surfaces []SurfJSON `json:"surfaces"`
-		Links    []LinkJSON `json:"links"`    // all links flattened
+		W          int             `json:"w"`
+		H          int             `json:"h"`
+		Walls      []debugCoord    `json:"walls"`
+		Cells      []CellJSON      `json:"cells"`      // all surface cells with their surface ID
+		Surfaces   []SurfJSON      `json:"surfaces"`
+		Links      []LinkJSON      `json:"links"`      // all links flattened
+		AppleLinks []AppleLinkJSON `json:"appleLinks"` // all apple links flattened
 	}
 
 	var walls []debugCoord
@@ -197,6 +227,7 @@ func TestPrintSurfaces(t *testing.T) {
 	}
 
 	var links []LinkJSON
+	var appleLinks []AppleLinkJSON
 	for _, s := range g.Surfs {
 		for _, l := range s.Links {
 			path := make([]debugCoord, len(l.Path))
@@ -206,14 +237,30 @@ func TestPrintSurfaces(t *testing.T) {
 			}
 			links = append(links, LinkJSON{From: s.ID, To: l.To, Path: path})
 		}
+		for _, l := range s.Apples {
+			path := make([]debugCoord, len(l.Path))
+			for k, cell := range l.Path {
+				x, y := g.XY(cell)
+				path[k] = debugCoord{x, y}
+			}
+			ax, ay := g.XY(l.Apple)
+			sx, sy := g.XY(l.Start)
+			appleLinks = append(appleLinks, AppleLinkJSON{
+				From:  s.ID,
+				Apple: debugCoord{ax, ay},
+				Start: debugCoord{sx, sy},
+				Path:  path,
+			})
+		}
 	}
 
 	debugWriteJSON(t, "surfaces.json", SurfMapJSON{
-		W:        g.W,
-		H:        g.H,
-		Walls:    walls,
-		Cells:    cells,
-		Surfaces: surfs,
-		Links:    links,
+		W:          g.W,
+		H:          g.H,
+		Walls:      walls,
+		Cells:      cells,
+		Surfaces:   surfs,
+		Links:      links,
+		AppleLinks: appleLinks,
 	})
 }

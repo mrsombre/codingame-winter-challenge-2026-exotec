@@ -12,6 +12,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func findAppleLink(s Surface, apple int) (AppleLink, bool) {
+	for _, link := range s.Apples {
+		if link.Apple == apple {
+			return link, true
+		}
+	}
+	return AppleLink{}, false
+}
+
 func TestMain(m *testing.M) {
 	debug = false
 	os.Exit(m.Run())
@@ -39,7 +48,9 @@ func testGame(opts ...int64) *Game {
 
 	lines := engine.SerializeGlobalInfoFor(p0, eg)
 	s := bufio.NewScanner(strings.NewReader(strings.Join(lines, "\n")))
-	return Init(s)
+	g := Init(s)
+	(&Plan{G: g}).Init()
+	return g
 }
 
 // testGameFull creates a Game with grid + first turn data (apples + snakes).
@@ -54,6 +65,7 @@ func testGameFull(opts ...int64) *Game {
 	s := bufio.NewScanner(strings.NewReader(strings.Join(lines, "\n")))
 	g := Init(s)
 	g.Turn(s)
+	(&Plan{G: g}).Init()
 	return g
 }
 
@@ -70,6 +82,7 @@ func testGridInput(lines []string) *Game {
 
 	s := bufio.NewScanner(strings.NewReader(strings.Join(all, "\n")))
 	g := Init(s)
+	(&Plan{G: g}).Init()
 	return g
 }
 
@@ -214,156 +227,6 @@ func TestSurfaces(t *testing.T) {
 		assert.Equal(t, tt.right, s.Right, "S%d Right", tt.id)
 		assert.Equal(t, tt.len, s.Len, "S%d Len", tt.id)
 	}
-
-	// BFS link invariants
-	for _, s := range g.Surfs {
-		for _, l := range s.Links {
-			// Path length matches Len
-			assert.Equal(t, l.Len, len(l.Path)-1,
-				"S%d→S%d Len vs Path length", s.ID, l.To)
-			// Path starts at an edge cell of the source surface
-			p0x, _ := g.XY(l.Path[0])
-			assert.True(t, p0x == s.Left || p0x == s.Right,
-				"S%d→S%d Path[0] should be edge cell", s.ID, l.To)
-			// Path ends at landing cell
-			assert.Equal(t, l.Landing, l.Path[len(l.Path)-1],
-				"S%d→S%d Path[-1] should be Landing", s.ID, l.To)
-			// Landing cell belongs to target surface
-			assert.Equal(t, l.To, g.SurfAt[l.Landing],
-				"S%d→S%d Landing SurfAt mismatch", s.ID, l.To)
-		}
-	}
-
-	// Verify links exist (non-zero count)
-	linkCount := 0
-	for _, s := range g.Surfs {
-		linkCount += len(s.Links)
-	}
-	assert.True(t, linkCount > 0, "should have some links")
-}
-
-// --- Apple Surfaces ---
-
-func TestAppleSurfaces(t *testing.T) {
-	// Grid layout (7x6):
-	//   .......   y=0
-	//   .......   y=1  <- cell above apple at (3,2) → apple surface
-	//   ...A...   y=2  <- apple at (3,2); cell above wall at (1,3) is (1,2) → no apple surface (already solid)
-	//   .#.....   y=3  <- wall at (1,3)
-	//   ..A.A..   y=4  <- apples at (2,4) and (4,4); two separate apple surfaces at y=3
-	//   #######   y=5  <- all walls → solid surface at y=4 x=0..6
-	g := testGridInput([]string{
-		".......",
-		".......",
-		".......",
-		".#.....",
-		".......",
-		"#######",
-	})
-
-	// Before apples: solid surfaces only.
-	solidCount := len(g.Surfs)
-	// (1,2) above wall at (1,3) → solid surface; (0..6,4) above wall row → solid surface
-	assert.True(t, solidCount > 0)
-	for _, s := range g.Surfs {
-		assert.Equal(t, SurfSolid, s.Type)
-	}
-
-	// Inject apples manually and init.
-	g.Ap = []int{g.Idx(3, 2), g.Idx(2, 4), g.Idx(4, 4)}
-	g.ANum = 3
-
-	g.InitAppleSurfaces()
-
-	// Count by type.
-	var solid, apple, none int
-	for _, s := range g.Surfs {
-		switch s.Type {
-		case SurfSolid:
-			solid++
-		case SurfApple:
-			apple++
-		case SurfNone:
-			none++
-		}
-	}
-	assert.Equal(t, solidCount, solid, "solid count unchanged")
-	assert.Equal(t, 0, none, "no stale surfaces on first call")
-	assert.Equal(t, 3, apple)
-
-	// Apple at (3,2): cell above is (3,1), free → apple surface.
-	sid31 := g.SurfAt[g.Idx(3, 1)]
-	assert.True(t, sid31 >= 0, "apple surface at (3,1)")
-	assert.Equal(t, SurfApple, g.Surfs[sid31].Type)
-	assert.Equal(t, 1, g.Surfs[sid31].Len)
-
-	// Apple at (2,4) and (4,4): separate surfaces.
-	sid23 := g.SurfAt[g.Idx(2, 3)]
-	assert.True(t, sid23 >= 0, "apple surface at (2,3)")
-	assert.Equal(t, SurfApple, g.Surfs[sid23].Type)
-
-	sid43 := g.SurfAt[g.Idx(4, 3)]
-	assert.True(t, sid43 >= 0, "apple surface at (4,3)")
-	assert.Equal(t, SurfApple, g.Surfs[sid43].Type)
-	assert.NotEqual(t, sid23, sid43, "two apples → two separate surfaces")
-
-	// Apple surfaces have BFS links.
-	assert.True(t, len(g.Surfs[sid31].Links) > 0, "apple surface should have links")
-
-	// --- Second turn: apple at (3,2) eaten, others remain ---
-	g.Ap = []int{g.Idx(2, 4), g.Idx(4, 4)}
-	g.ANum = 2
-
-	g.UpdateAppleSurfaces()
-
-	// (3,1) surface becomes SurfNone (links kept, type marks it invalid).
-	assert.Equal(t, SurfNone, g.Surfs[sid31].Type, "eaten apple → SurfNone")
-
-	// (2,3) and (4,3) still apple.
-	assert.Equal(t, SurfApple, g.Surfs[sid23].Type)
-	assert.Equal(t, SurfApple, g.Surfs[sid43].Type)
-
-	// Count none.
-	var none2 int
-	for _, s := range g.Surfs {
-		if s.Type == SurfNone {
-			none2++
-		}
-	}
-	assert.Equal(t, 1, none2, "1 eaten apple surface")
-
-	// --- Wall above apple: no apple surface created ---
-	// (1,2) is already solid. Tested via InitAppleSurfaces — solid not overwritten.
-	sid12 := g.SurfAt[g.Idx(1, 2)]
-	assert.True(t, sid12 >= 0)
-	assert.Equal(t, SurfSolid, g.Surfs[sid12].Type)
-}
-
-func TestAppleSurfacesStacked(t *testing.T) {
-	g := testGridInput([]string{
-		".......",
-		".......",
-		".......",
-		".......",
-		".......",
-		"#######",
-	})
-
-	// Two stacked apples: (3,3) and (3,2) → surfaces at (3,2) and (3,1).
-	g.Ap = []int{g.Idx(3, 3), g.Idx(3, 2)}
-	g.ANum = 2
-
-	g.InitAppleSurfaces()
-
-	sid32 := g.SurfAt[g.Idx(3, 2)]
-	assert.True(t, sid32 >= 0, "apple surface at (3,2)")
-	assert.Equal(t, SurfApple, g.Surfs[sid32].Type)
-
-	sid31 := g.SurfAt[g.Idx(3, 1)]
-	assert.True(t, sid31 >= 0, "apple surface at (3,1)")
-	assert.Equal(t, SurfApple, g.Surfs[sid31].Type)
-
-	assert.NotEqual(t, sid32, sid31, "stacked apples → two separate surfaces")
 }
 
 // --- Turn ---

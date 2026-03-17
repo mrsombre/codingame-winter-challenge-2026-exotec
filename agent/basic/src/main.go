@@ -22,12 +22,13 @@ func main() {
 	p := &Plan{G: g}
 	bot := &Decision{G: g, P: p}
 
-	// first turn: read + precompute within 1s budget
 	g.Turn(s)
+	p.Init()
 	bot.Decide()
 
 	for {
 		g.Turn(s)
+		p.UpdateAppleSurfaces()
 		bot.Decide()
 	}
 }
