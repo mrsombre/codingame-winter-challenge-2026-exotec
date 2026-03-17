@@ -215,22 +215,34 @@ func TestSurfaces(t *testing.T) {
 		assert.Equal(t, tt.len, s.Len, "S%d Len", tt.id)
 	}
 
-	// symmetry: every link has a reverse
-	for i, links := range g.SurfAdj {
-		for _, l := range links {
-			assert.True(t, hasLink(g.SurfAdj[l.To], i, l.Cost, l.MinBody),
-				"S%d→S%d cost=%d missing reverse", i, l.To, l.Cost)
+	// BFS link invariants
+	for _, s := range g.Surfs {
+		for _, l := range s.Links {
+			// Path length matches Len
+			assert.Equal(t, l.Len, len(l.Path)-1,
+				"S%d→S%d Len vs Path length", s.ID, l.To)
+			// Path starts at an edge cell of the source surface
+			p0x, _ := g.XY(l.Path[0])
+			assert.True(t, p0x == s.Left || p0x == s.Right,
+				"S%d→S%d Path[0] should be edge cell", s.ID, l.To)
+			// Path ends at landing cell
+			assert.Equal(t, l.Landing, l.Path[len(l.Path)-1],
+				"S%d→S%d Path[-1] should be Landing", s.ID, l.To)
+			// Landing cell belongs to target surface
+			assert.Equal(t, l.To, g.SurfAt[l.Landing],
+				"S%d→S%d Landing SurfAt mismatch", s.ID, l.To)
+			// Len within max depth
+			assert.True(t, l.Len <= 8,
+				"S%d→S%d Len %d exceeds max depth", s.ID, l.To, l.Len)
 		}
 	}
-}
 
-func hasLink(adj []SurfLink, to, cost, minBody int) bool {
-	for _, l := range adj {
-		if l.To == to && l.Cost == cost && l.MinBody == minBody {
-			return true
-		}
+	// Verify links exist (non-zero count)
+	linkCount := 0
+	for _, s := range g.Surfs {
+		linkCount += len(s.Links)
 	}
-	return false
+	assert.True(t, linkCount > 0, "should have some links")
 }
 
 // --- Turn ---

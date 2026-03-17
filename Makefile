@@ -10,7 +10,7 @@ P1 ?= opponent
 export GOCACHE := $(CURDIR)/tmp/go-build
 export GOMAXPROCS := 1
 
-.PHONY: test build-agent build-opponent match match-bin bundle-% clean
+.PHONY: test build-agent build-opponent match match-bin bundle-% clean debug-data debug-dev
 
 test:
 	go test ./agent/$(LOGIC)/src
@@ -37,6 +37,12 @@ match-bin:
 		--p0-bin $(BIN_DIR)/$(P0) \
 		--p1-bin $(BIN_DIR)/$(P1) \
 		$(ENGINE_ARGS) $(GAME_ARGS)
+
+debug-data:
+	go test -tags debug ./agent/$(LOGIC)/src -run "^TestPrint" -v
+
+debug-dev: debug-data
+	cd debug && pnpm dev
 
 clean:
 	rm -rf $(BIN_DIR)

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -53,15 +54,15 @@ type Surface struct {
 	Left  int // leftmost x
 	Right int // rightmost x
 	Len   int // Right - Left + 1
+	Links []SurfLink
 }
 
-// SurfLink represents a directed connection between two surfaces.
+// SurfLink represents a BFS-based directed connection between two surfaces.
 type SurfLink struct {
-	To      int // target surface index
-	Cost    int // Manhattan distance between edge cells
-	MinBody int // = Cost (body length to bridge, anchor excluded)
-	From    int // source edge cell index
-	ToCell  int // target edge cell index
+	To      int   // target surface ID
+	Landing int   // landing cell index (first cell reached on target surface)
+	Len     int   // BFS step count
+	Path    []int // full path: [source edge cell, ..., landing cell]
 }
 
 type Game struct {
@@ -76,9 +77,8 @@ type Game struct {
 	InGrid []bool   // true for game-grid cells, false for border cells
 
 	// Static map precomputation
-	Surfs   []Surface
-	SurfAt  []int // cell -> surface index (-1 if not on surface)
-	SurfAdj [][]SurfLink
+	Surfs  []Surface
+	SurfAt []int // cell -> surface index (-1 if not on surface)
 
 	MyIDs [MaxPSn]int // my snake IDs
 	MyN   int
@@ -272,7 +272,7 @@ func (g *Game) Manhattan(a, b int) int {
 func (g *Game) precomputeStaticMap() {
 	g.SurfAt = make([]int, g.NCells)
 	g.detectSurfaces()
-	g.buildSurfaceGraph()
+	g.buildSurfaceLinks()
 }
 
 // --- Surface detection (uses wall-only grounding for static surfaces) ---
@@ -316,103 +316,127 @@ func (g *Game) addSurface(s Surface) {
 	}
 }
 
-// --- Surface graph ---
+// --- Surface links (BFS-based) ---
 
-const maxLinkDist = 5 // prune connections with Manhattan > 5
+const maxLinkDepth = 8 // max BFS steps from surface edge
 
-// betweenRect returns true if cell g lies strictly inside the bounding
-// rectangle of a→b and is strictly closer to a than b is.
-func betweenRect(g *Game, a, b, c int) bool {
-	ax, ay := g.XY(a)
-	bx, by := g.XY(b)
-	cx, cy := g.XY(c)
-	minX, maxX := ax, bx
-	if minX > maxX {
-		minX, maxX = maxX, minX
-	}
-	minY, maxY := ay, by
-	if minY > maxY {
-		minY, maxY = maxY, minY
-	}
-	if cx < minX || cx > maxX || cy < minY || cy > maxY {
-		return false
-	}
-	if cx == ax && cy == ay {
-		return false
-	}
-	return g.Manhattan(a, c) < g.Manhattan(a, b)
-}
-
-func (g *Game) buildSurfaceGraph() {
+func (g *Game) buildSurfaceLinks() {
 	n := len(g.Surfs)
-	g.SurfAdj = make([][]SurfLink, n)
+	visited := make([]bool, g.NCells)
+	dist := make([]int, g.NCells)
+	parent := make([]int, g.NCells)
+	queue := make([]int, 0, g.NCells)
 
-	type edgeCell struct {
-		surfID int
-		cell   int
-	}
-	var edges []edgeCell
-	for i := 0; i < n; i++ {
-		s := &g.Surfs[i]
-		edges = append(edges, edgeCell{i, g.Idx(s.Left, s.Y)})
+	// surfBest[targetID] = best SurfLink from any edge of the current surface.
+	surfBest := make(map[int]SurfLink)
+
+	for si := 0; si < n; si++ {
+		s := &g.Surfs[si]
+
+		// Collect edge cells.
+		edges := [2]int{g.Idx(s.Left, s.Y), -1}
+		ne := 1
 		if s.Right != s.Left {
-			edges = append(edges, edgeCell{i, g.Idx(s.Right, s.Y)})
+			edges[1] = g.Idx(s.Right, s.Y)
+			ne = 2
 		}
-	}
 
-	type candidate struct {
-		from, to         int
-		fromCell, toCell int
-		dist             int
-	}
-
-	best := make([]candidate, n*n)
-	for i := range best {
-		best[i].dist = maxLinkDist + 1
-	}
-
-	for i := 0; i < len(edges); i++ {
-		for j := 0; j < len(edges); j++ {
-			ei, ej := edges[i], edges[j]
-			if ei.surfID == ej.surfID {
-				continue
-			}
-			d := g.Manhattan(ei.cell, ej.cell)
-			if d > maxLinkDist {
-				continue
-			}
-			key := ei.surfID*n + ej.surfID
-			if d < best[key].dist {
-				best[key] = candidate{ei.surfID, ej.surfID, ei.cell, ej.cell, d}
-			}
+		for k := range surfBest {
+			delete(surfBest, k)
 		}
-	}
 
-	for i := range best {
-		c := &best[i]
-		if c.dist > maxLinkDist {
-			continue
-		}
-		for k := 0; k < len(edges); k++ {
-			ek := edges[k]
-			if ek.surfID == c.from || ek.surfID == c.to {
-				continue
-			}
-			if betweenRect(g, c.fromCell, c.toCell, ek.cell) {
-				c.dist = maxLinkDist + 1
-				break
-			}
-		}
-	}
+		for ei := 0; ei < ne; ei++ {
+			src := edges[ei]
+			queue = queue[:0]
 
-	for i := range best {
-		c := best[i]
-		if c.dist > maxLinkDist {
-			continue
+			// Mark source surface cells as visited so BFS doesn't re-enter own surface.
+			for x := s.Left; x <= s.Right; x++ {
+				visited[g.Idx(x, s.Y)] = true
+			}
+			// Unmark source edge so it enters the queue.
+			visited[src] = false
+
+			queue = append(queue, src)
+			visited[src] = true
+			dist[src] = 0
+			parent[src] = -1
+
+			// Per-edge hits: target surface ID → landing cell.
+			edgeHits := make(map[int]int)
+			// Track all surface-hit cells (not added to queue) for visited cleanup.
+			var surfHits []int
+
+			head := 0
+			for head < len(queue) {
+				cur := queue[head]
+				head++
+				if dist[cur] >= maxLinkDepth {
+					continue
+				}
+
+				for d := 0; d < 4; d++ {
+					nb := g.Nbm[cur][d]
+					if nb < 0 || visited[nb] {
+						continue
+					}
+					visited[nb] = true
+					dist[nb] = dist[cur] + 1
+					parent[nb] = cur
+
+					tid := g.SurfAt[nb]
+					if tid >= 0 && tid != si {
+						// Hit a different surface — record, don't expand.
+						surfHits = append(surfHits, nb)
+						if _, already := edgeHits[tid]; !already {
+							edgeHits[tid] = nb
+						}
+						continue
+					}
+					queue = append(queue, nb)
+				}
+			}
+
+			// Reconstruct paths for hits while parent array is still valid.
+			for tid, landing := range edgeHits {
+				d := dist[landing]
+				if prev, ok := surfBest[tid]; ok && d >= prev.Len {
+					continue
+				}
+				// Trace back from landing to src.
+				path := make([]int, d+1)
+				p := landing
+				for i := d; i >= 0; i-- {
+					path[i] = p
+					p = parent[p]
+				}
+				surfBest[tid] = SurfLink{
+					To:      tid,
+					Landing: landing,
+					Len:     d,
+					Path:    path,
+				}
+			}
+
+			// Clear visited for next edge.
+			for i := 0; i < len(queue); i++ {
+				visited[queue[i]] = false
+			}
+			for _, cell := range surfHits {
+				visited[cell] = false
+			}
+			for x := s.Left; x <= s.Right; x++ {
+				visited[g.Idx(x, s.Y)] = false
+			}
+			surfHits = surfHits[:0]
 		}
-		g.SurfAdj[c.from] = append(g.SurfAdj[c.from], SurfLink{
-			To: c.to, Cost: c.dist, MinBody: c.dist,
-			From: c.fromCell, ToCell: c.toCell,
+
+		// Store links on surface, sorted by Len ascending.
+		s.Links = make([]SurfLink, 0, len(surfBest))
+		for _, link := range surfBest {
+			s.Links = append(s.Links, link)
+		}
+		sort.Slice(s.Links, func(i, j int) bool {
+			return s.Links[i].Len < s.Links[j].Len
 		})
 	}
 }
