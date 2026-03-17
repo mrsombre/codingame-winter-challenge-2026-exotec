@@ -16,7 +16,7 @@ const (
 
 func (d *Decision) phaseSafety() {
 	g := d.G
-	n := g.W * g.H
+	n := g.NCells
 	numMy := len(d.MySnakes)
 
 	// Build body-cell bitmap (all alive snake bodies).
@@ -46,20 +46,20 @@ func (d *Decision) phaseSafety() {
 		ownTail := sn.Body[len(sn.Body)-1]
 
 		// OOB head: emergency — prefer directions back inside the map.
-		if head >= n {
-			if head < g.NCells {
+		if !g.IsInGrid(head) {
+			if head >= 0 && head < g.NCells {
 				bestDir := -1
 				bestPriority := -1
 				for dir := 0; dir < 4; dir++ {
-					nc := g.Nb[head][dir]
+					nc := g.Nbm[head][dir]
 					if nc == -1 || nc == neck {
 						continue
 					}
-					if nc >= 0 && nc < n && bodyCell[nc] && nc != ownTail {
+					if g.IsInGrid(nc) && bodyCell[nc] && nc != ownTail {
 						continue
 					}
 					priority := 0
-					if nc >= 0 && nc < n {
+					if g.IsInGrid(nc) {
 						priority = 2 // back inside map
 					} else {
 						priority = 1 // still OOB but alive
@@ -101,12 +101,12 @@ func (d *Decision) phaseSafety() {
 
 		for dir := 0; dir < 4; dir++ {
 			safeScore[si][dir] = -1
-			nc := g.Nb[head][dir]
+			nc := g.Nbm[head][dir]
 			if nc == -1 || nc == neck {
 				continue
 			}
 			// Body collision (own tail retracts → safe to enter).
-			if nc >= 0 && nc < n && bodyCell[nc] && nc != ownTail {
+			if g.IsInGrid(nc) && bodyCell[nc] && nc != ownTail {
 				continue
 			}
 			safeScore[si][dir] = reach[dir]
@@ -148,10 +148,10 @@ func (d *Decision) phaseSafety() {
 			snIdx := d.MySnakes[si]
 			sn := &g.Sn[snIdx]
 			head := sn.Body[0]
-			if head < 0 || head >= n {
+			if !g.IsInGrid(head) {
 				continue
 			}
-			nc := g.Nb[head][d.AssignedDir[si]]
+			nc := g.Nbm[head][d.AssignedDir[si]]
 			if nc < 0 {
 				continue
 			}
@@ -180,7 +180,7 @@ func (d *Decision) phaseSafety() {
 			if safeScore[si][dir] < 0 {
 				continue
 			}
-			nc := g.Nb[head][dir]
+			nc := g.Nbm[head][dir]
 			if nc < 0 {
 				continue
 			}
@@ -311,19 +311,17 @@ func (d *Decision) rolloutChooseDirCheap(sn Snake, apples []int, target int) int
 		return DU
 	}
 	neck := neckOf(sn.Body)
-	n := g.W * g.H
-
 	// OOB head: prefer directions back inside the map.
-	if head >= n {
+	if !g.IsInGrid(head) {
 		bestDir := -1
 		bestPriority := -1
 		for dir := 0; dir < 4; dir++ {
-			nc := g.Nb[head][dir]
+			nc := g.Nbm[head][dir]
 			if nc == -1 || nc == neck {
 				continue
 			}
 			priority := 0
-			if nc >= 0 && nc < n {
+			if g.IsInGrid(nc) {
 				priority = 2
 			} else {
 				priority = 1
@@ -354,16 +352,16 @@ func (d *Decision) rolloutChooseDirCheap(sn Snake, apples []int, target int) int
 	bestDir := -1
 	bestScore := -1 << 30
 	for dir := 0; dir < 4; dir++ {
-		nc := g.Nb[head][dir]
+		nc := g.Nbm[head][dir]
 		if nc == -1 || nc == neck {
 			continue
 		}
-		if nc >= 0 && nc < n && !g.Cell[nc] {
+		if g.IsInGrid(nc) && !g.Cell[nc] {
 			continue // wall
 		}
 
 		score := 0
-		if nc >= 0 && nc < n {
+		if g.IsInGrid(nc) {
 			if target >= 0 {
 				score = -g.Manhattan(nc, target) * 100
 			}
@@ -387,8 +385,8 @@ func (d *Decision) rolloutChooseDirCheap(sn Snake, apples []int, target int) int
 // reachable free cells up to limit. No gravity — just wall avoidance.
 // Cheap proxy for trap detection in rollout scoring.
 func quickReach(g *Game, head int, limit int) int {
-	n := g.W * g.H
-	if head < 0 || head >= n {
+	n := g.NCells
+	if !g.IsInGrid(head) {
 		return 0
 	}
 	if limit > n {
@@ -403,7 +401,7 @@ func quickReach(g *Game, head int, limit int) int {
 		c := queue[qi]
 		count++
 		for dir := 0; dir < 4; dir++ {
-			nc := g.Nb[c][dir]
+			nc := g.Nbm[c][dir]
 			if nc < 0 || nc >= n || visited[nc] || !g.Cell[nc] {
 				continue
 			}
@@ -498,7 +496,7 @@ func (d *Decision) scoreRollout(firstDirs []int) int {
 			snakes[i].Body = append([]int(nil), newBody...)
 			snakes[i].Len = len(snakes[i].Body)
 			head := snakes[i].Body[0]
-			if head >= 0 && head < g.OobBase && d.P.isApple(head) {
+			if d.P.isApple(head) {
 				if snakes[i].Owner == 0 {
 					myEats++
 				} else {

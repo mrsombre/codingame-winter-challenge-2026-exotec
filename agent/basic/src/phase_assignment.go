@@ -135,7 +135,7 @@ func (d *Decision) phaseAssignment() {
 		snIdx := d.MySnakes[si]
 		sn := &g.Sn[snIdx]
 		head := sn.Body[0]
-		if head < 0 || head >= g.W*g.H {
+		if !g.IsInGrid(head) {
 			continue
 		}
 		myLen := len(sn.Body)
@@ -157,7 +157,7 @@ func (d *Decision) phaseAssignment() {
 				continue // only target smaller enemies (len 3-4)
 			}
 			opHead := op.Body[0]
-			if opHead < 0 || opHead >= g.W*g.H {
+			if !g.IsInGrid(opHead) {
 				continue
 			}
 			r := bfs[opHead]

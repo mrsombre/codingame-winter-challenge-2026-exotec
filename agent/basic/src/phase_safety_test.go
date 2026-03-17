@@ -22,7 +22,7 @@ func TestSafety_NoLethalMoves(t *testing.T) {
 	d.phaseAssignment()
 	d.phaseSafety()
 
-	n := g.W * g.H
+	n := g.NCells
 
 	// Build body cell bitmap
 	bodyCell := make([]bool, n)
@@ -42,7 +42,7 @@ func TestSafety_NoLethalMoves(t *testing.T) {
 		sn := &g.Sn[snIdx]
 		head := sn.Body[0]
 		dir := d.AssignedDir[si]
-		nc := g.Nb[head][dir]
+		nc := g.Nbm[head][dir]
 
 		assert.NotEqual(t, -1, nc,
 			"snake %d dir %s → wall", sn.ID, Dn[dir])
@@ -69,7 +69,7 @@ func TestSafety_NotTrapped(t *testing.T) {
 	d.phaseAssignment()
 	d.phaseSafety()
 
-	n := g.W * g.H
+	n := g.NCells
 	for si, snIdx := range d.MySnakes {
 		sn := &g.Sn[snIdx]
 		bfs := d.BFS[si]
@@ -108,7 +108,7 @@ func TestSafety_OverridesCollision(t *testing.T) {
 
 	dir := d.AssignedDir[0]
 	head := g.Sn[d.MySnakes[0]].Body[0]
-	nc := g.Nb[head][dir]
+	nc := g.Nbm[head][dir]
 
 	// After safety, direction should be valid
 	assert.NotEqual(t, -1, nc, "post-safety direction should not hit wall")

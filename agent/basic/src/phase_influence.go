@@ -4,7 +4,7 @@ package main
 
 func (d *Decision) phaseInfluence() {
 	g := d.G
-	n := g.W * g.H
+	n := g.NCells
 
 	if len(d.Influence) < n {
 		d.Influence = make([]int, n)

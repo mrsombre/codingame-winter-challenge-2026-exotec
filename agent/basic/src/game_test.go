@@ -12,10 +12,21 @@ import (
 )
 
 const testSeed int64 = -4514697363674281500
+const testLeague = 3
+
+func gameOpts(opts ...int64) (int64, int) {
+	if len(opts) == 0 {
+		return testSeed, testLeague
+	}
+	if len(opts) == 1 {
+		return opts[0], testLeague
+	}
+	return opts[0], int(opts[1])
+}
 
 // testGame creates a Game initialized from engine-generated grid (Init only, no turn data).
-func testGame() *Game {
-	eg := engine.NewGame(testSeed, 3)
+func testGame(opts ...int64) *Game {
+	eg := engine.NewGame(gameOpts(opts...))
 	p0 := engine.NewPlayer(0)
 	p1 := engine.NewPlayer(1)
 	eg.Init([]*engine.Player{p0, p1})
@@ -26,8 +37,8 @@ func testGame() *Game {
 }
 
 // testGameFull creates a Game with grid + first turn data (apples + snakes).
-func testGameFull() *Game {
-	eg := engine.NewGame(testSeed, 3)
+func testGameFull(opts ...int64) *Game {
+	eg := engine.NewGame(gameOpts(opts...))
 	p0 := engine.NewPlayer(0)
 	p1 := engine.NewPlayer(1)
 	eg.Init([]*engine.Player{p0, p1})
@@ -38,6 +49,35 @@ func testGameFull() *Game {
 	g := Init(s)
 	g.Read(s)
 	return g
+}
+
+func testGridInput(lines []string) *Game {
+	w := len(lines[0])
+	h := len(lines)
+	header := []string{
+		"0",
+		fmt.Sprintf("%d", w),
+		fmt.Sprintf("%d", h),
+	}
+	all := append(header, lines...)
+	all = append(all, "0") // snake count
+
+	s := bufio.NewScanner(strings.NewReader(strings.Join(all, "\n")))
+	g := Init(s)
+	return g
+}
+
+func testMovePlan(gridLines []string, apples [][2]int) (*Game, *Plan) {
+	g := testGridInput(gridLines)
+	p := &Plan{g: g}
+	g.Ap = g.Ap[:0]
+	for _, a := range apples {
+		g.Ap = append(g.Ap, g.Idx(a[0], a[1]))
+	}
+	g.ANum = len(g.Ap)
+	p.Precompute()
+	p.RebuildAppleMap()
+	return g, p
 }
 
 // --- Dl, Dn ---
@@ -78,7 +118,7 @@ func TestInit(t *testing.T) {
 	// apples
 	assert.Equal(t, 30, g.ANum)
 	assert.Equal(t, g.Idx(20, 9), g.Ap[0])
-	assert.Equal(t, g.Idx(7, 9), g.Ap[1])
+	assert.Equal(t, g.Idx(18, 11), g.Ap[g.ANum-1])
 
 	// snakes
 	assert.Equal(t, 6, g.SNum)
@@ -104,29 +144,44 @@ func TestIsWall(t *testing.T) {
 func TestNeighbors(t *testing.T) {
 	g := testGame()
 
-	// W=28, H=15, OobBase=420
-	// OOB layout: top(420+x), bottom(448+x), left(476+y), right(491+y)
+	// Nb: all neighbors have real indices, -1 only at expanded grid edge
 	tests := []struct {
 		name string
 		x, y int
-		want [4]int // [UP, RIGHT, DOWN, LEFT]
+		wantNb  [4]int // [UP, RIGHT, DOWN, LEFT]
+		wantNbm [4]int // valid moves (no walls)
 	}{
-		{"corner top-left", 0, 0, [4]int{420, 1, 28, 476}},
-		{"corner top-right", 27, 0, [4]int{447, 491, 55, 26}},
-		// (0,14) wall: UP/RIGHT walls, DOWN=OOB bottom, LEFT=OOB left
-		{"corner bot-left", 0, 14, [4]int{-1, -1, 448, 490}},
-		// (27,14) wall: UP/LEFT walls, RIGHT=OOB right, DOWN=OOB bottom
-		{"corner bot-right", 27, 14, [4]int{-1, 505, 475, -1}},
-		// (10,1) all free neighbors
-		{"all free", 10, 1, [4]int{10, 39, 66, 37}},
-		// (10,6) wall: all four adjacent cells are free
-		{"wall cell", 10, 6, [4]int{150, 179, 206, 177}},
-		// (5,13) free but surrounded by walls below/left
-		{"near bottom", 5, 13, [4]int{341, 370, -1, -1}},
+		{"corner top-left", 0, 0,
+			[4]int{g.Idx(0, -1), g.Idx(1, 0), g.Idx(0, 1), g.Idx(-1, 0)},
+			[4]int{g.Idx(0, -1), g.Idx(1, 0), g.Idx(0, 1), g.Idx(-1, 0)}},
+		{"corner top-right", 27, 0,
+			[4]int{g.Idx(27, -1), g.Idx(28, 0), g.Idx(27, 1), g.Idx(26, 0)},
+			[4]int{g.Idx(27, -1), g.Idx(28, 0), g.Idx(27, 1), g.Idx(26, 0)}},
+		// (0,14) wall: UP/RIGHT are walls → Nb has indices, Nbm has -1
+		{"corner bot-left", 0, 14,
+			[4]int{g.Idx(0, 13), g.Idx(1, 14), g.Idx(0, 15), g.Idx(-1, 14)},
+			[4]int{-1, -1, g.Idx(0, 15), g.Idx(-1, 14)}},
+		// (27,14) wall: UP/LEFT are walls
+		{"corner bot-right", 27, 14,
+			[4]int{g.Idx(27, 13), g.Idx(28, 14), g.Idx(27, 15), g.Idx(26, 14)},
+			[4]int{-1, g.Idx(28, 14), g.Idx(27, 15), -1}},
+		// (10,1) all free
+		{"all free", 10, 1,
+			[4]int{g.Idx(10, 0), g.Idx(11, 1), g.Idx(10, 2), g.Idx(9, 1)},
+			[4]int{g.Idx(10, 0), g.Idx(11, 1), g.Idx(10, 2), g.Idx(9, 1)}},
+		// (10,6) wall cell: Nb has all neighbors, Nbm = -1 for self (wall) neighbors check not needed — Nbm filters wall AT neighbor
+		{"wall cell", 10, 6,
+			[4]int{g.Idx(10, 5), g.Idx(11, 6), g.Idx(10, 7), g.Idx(9, 6)},
+			[4]int{g.Idx(10, 5), g.Idx(11, 6), g.Idx(10, 7), g.Idx(9, 6)}},
+		// (5,13) free but walls below/left
+		{"near bottom", 5, 13,
+			[4]int{g.Idx(5, 12), g.Idx(6, 13), g.Idx(5, 14), g.Idx(4, 13)},
+			[4]int{g.Idx(5, 12), g.Idx(6, 13), -1, -1}},
 	}
 	for _, tt := range tests {
-		nb := g.Nb[g.Idx(tt.x, tt.y)]
-		assert.Equal(t, tt.want, nb, tt.name)
+		idx := g.Idx(tt.x, tt.y)
+		assert.Equal(t, tt.wantNb, g.Nb[idx], "%s Nb", tt.name)
+		assert.Equal(t, tt.wantNbm, g.Nbm[idx], "%s Nbm", tt.name)
 	}
 }
 
@@ -177,17 +232,15 @@ func TestRead(t *testing.T) {
 	assert.Equal(t, 3, g.Sn[5].Len)
 
 	// simulate second turn: snake 0 grew, some apples eaten
-	turn := &testTurnInput{
-		Apples: [][2]int{{9, 9}, {18, 9}},
-		Snakes: []struct {
-			ID   int
-			Body [][2]int
-		}{
-			{0, [][2]int{{17, 10}, {16, 10}, {16, 11}, {16, 12}}},
-			{3, [][2]int{{11, 9}, {11, 10}, {11, 11}}},
-		},
-	}
-	g.Read(turn.Scanner())
+	turn2 := strings.Join([]string{
+		"2",
+		"9 9",
+		"18 9",
+		"2",
+		"0 17,10:16,10:16,11:16,12",
+		"3 11,9:11,10:11,11",
+	}, "\n")
+	g.Read(bufio.NewScanner(strings.NewReader(turn2)))
 
 	// apples reduced
 	assert.Equal(t, 2, g.ANum)
@@ -252,39 +305,3 @@ func TestParseBody(t *testing.T) {
 	}
 }
 
-// helpers
-
-type testTurnInput struct {
-	Apples [][2]int
-	Snakes []struct {
-		ID   int
-		Body [][2]int
-	}
-}
-
-func (in *testTurnInput) Scanner() *bufio.Scanner {
-	var lines []string
-
-	lines = append(lines, fmt.Sprintf("%d", len(in.Apples)))
-	for _, a := range in.Apples {
-		lines = append(lines, fmt.Sprintf("%d %d", a[0], a[1]))
-	}
-
-	lines = append(lines, fmt.Sprintf("%d", len(in.Snakes)))
-	for _, s := range in.Snakes {
-		lines = append(lines, fmt.Sprintf("%d %s", s.ID, formatBody(s.Body)))
-	}
-
-	return bufio.NewScanner(strings.NewReader(strings.Join(lines, "\n")))
-}
-
-func formatBody(body [][2]int) string {
-	var b strings.Builder
-	for i, p := range body {
-		if i > 0 {
-			b.WriteByte(':')
-		}
-		fmt.Fprintf(&b, "%d,%d", p[0], p[1])
-	}
-	return b.String()
-}
