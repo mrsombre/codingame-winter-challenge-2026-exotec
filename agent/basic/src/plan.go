@@ -28,13 +28,15 @@ type Surface struct {
 // SurfLink represents a directed connection between two surfaces.
 type SurfLink struct {
 	To      int // target surface index
-	Cost    int // number of turns to traverse
-	MinBody int // minimum body length needed (0 = no constraint)
+	Cost    int // Manhattan distance between edge cells
+	MinBody int // = Cost (body length to bridge, anchor excluded)
+	From    int // source edge cell index
+	ToCell  int // target edge cell index
 }
 
 // Plan holds precomputed data and reusable BFS buffers.
 type Plan struct {
-	g *Game
+	*Sim
 
 	// Static precomputation (set once by Precompute)
 	LandY []int // y-coordinate where a free-falling cell lands
@@ -42,35 +44,25 @@ type Plan struct {
 	// Surface graph
 	Surfs    []Surface
 	SurfAt   []int        // cell → surface index (-1 if not on surface)
-	SurfAdj  [][]SurfLink // adjacency list
-	fallSeen []bool       // scratch for addFallLink dedup (indexed by surface ID)
+	SurfAdj [][]SurfLink // adjacency list
 
 	// All-pairs surface distances (Floyd-Warshall, per body length)
 	surfN   int     // len(Surfs), cached
 	surfAPD [][]int // [bodyLen] flat N×N matrix; [from*surfN+to]
 
-	// Per-turn apple bitmap (rebuilt by RebuildAppleMap)
-	appleMap     []bool
-	appleMapPrev []int // previous apple positions for fast clear
-	appleMapN    int   // count of previous entries
-
 	// BFS reuse buffers
-	visitGen     []uint16 // flat [(cell*MaxAG+ag)*(MaxChainEaten+1)+eaten]
-	curGen       uint16
-	queue        []bfsNode
-	firstMoveBuf []int // scratch for single-snake move simulation
+	visitGen []uint16 // flat [(cell*MaxAG+ag)*(MaxChainEaten+1)+eaten]
+	curGen   uint16
+	queue    []bfsNode
 }
 
 // Precompute fills LandY, surfaces, and the surface graph.
 // Called once after Init (within the 1s first-turn budget).
 func (p *Plan) Precompute() {
-	n := p.g.NCells
+	n := p.G.NCells
 	p.LandY = make([]int, n)
 	p.SurfAt = make([]int, n)
-	p.appleMap = make([]bool, n)
-	p.appleMapPrev = make([]int, MaxAp)
-	p.visitGen = make([]uint16, p.g.NCells*MaxAG*(MaxChainEaten+1))
-	p.firstMoveBuf = make([]int, MaxSeg)
+	p.visitGen = make([]uint16, n*MaxAG*(MaxChainEaten+1))
 	p.computeLandY()
 	p.detectSurfaces()
 	p.buildSurfaceGraph()
@@ -80,31 +72,10 @@ func (p *Plan) Precompute() {
 	}
 }
 
-// RebuildAppleMap refreshes the apple bitmap from current game state.
-// Must be called before BFS each turn.
-func (p *Plan) RebuildAppleMap() {
-	p.rebuildAppleMapFrom(p.g.Ap[:p.g.ANum])
-}
-
-func (p *Plan) rebuildAppleMapFrom(apples []int) {
-	n := len(p.appleMap)
-	for i := 0; i < p.appleMapN; i++ {
-		p.appleMap[p.appleMapPrev[i]] = false
-	}
-	p.appleMapN = 0
-	for _, ap := range apples {
-		if ap >= 0 && ap < n {
-			p.appleMap[ap] = true
-			p.appleMapPrev[p.appleMapN] = ap
-			p.appleMapN++
-		}
-	}
-}
-
 // --- LandY (O(W×H) via bottom-up propagation) ---
 
 func (p *Plan) computeLandY() {
-	g := p.g
+	g := p.G
 	for x := 0; x < g.W; x++ {
 		landY := g.H - 1 // default: fall to grid bottom
 		for y := g.H - 1; y >= 0; y-- {
@@ -124,7 +95,7 @@ func (p *Plan) computeLandY() {
 // --- Surface detection (uses wall-only grounding for static surfaces) ---
 
 func (p *Plan) detectSurfaces() {
-	g := p.g
+	g := p.G
 	for i := range p.SurfAt {
 		p.SurfAt[i] = -1
 	}
@@ -156,7 +127,7 @@ func (p *Plan) detectSurfaces() {
 }
 
 func (p *Plan) addSurface(s Surface) {
-	g := p.g
+	g := p.G
 	p.Surfs = append(p.Surfs, s)
 	for x := s.Left; x <= s.Right; x++ {
 		p.SurfAt[g.Idx(x, s.Y)] = s.ID
@@ -165,96 +136,109 @@ func (p *Plan) addSurface(s Surface) {
 
 // --- Surface graph ---
 
+const maxLinkDist = 5 // prune connections with Manhattan > 5
+
+// betweenRect returns true if cell g lies strictly inside the bounding
+// rectangle of a→b and is strictly closer to a than b is.
+func betweenRect(g *Game, a, b, c int) bool {
+	ax, ay := g.XY(a)
+	bx, by := g.XY(b)
+	cx, cy := g.XY(c)
+	minX, maxX := ax, bx
+	if minX > maxX {
+		minX, maxX = maxX, minX
+	}
+	minY, maxY := ay, by
+	if minY > maxY {
+		minY, maxY = maxY, minY
+	}
+	if cx < minX || cx > maxX || cy < minY || cy > maxY {
+		return false
+	}
+	if cx == ax && cy == ay {
+		return false
+	}
+	return g.Manhattan(a, c) < g.Manhattan(a, b)
+}
+
 func (p *Plan) buildSurfaceGraph() {
-	g := p.g
 	n := len(p.Surfs)
 	p.SurfAdj = make([][]SurfLink, n)
-	p.fallSeen = make([]bool, n)
 
+	// Collect all edge cells: each surface contributes left and right edges.
+	g := p.G
+
+	type edgeCell struct {
+		surfID int
+		cell   int
+	}
+	var edges []edgeCell
 	for i := 0; i < n; i++ {
 		s := &p.Surfs[i]
-		if s.Left > 0 {
-			p.addFallLink(i, s.Left, s.Y, -1)
+		edges = append(edges, edgeCell{i, g.Idx(s.Left, s.Y)})
+		if s.Right != s.Left {
+			edges = append(edges, edgeCell{i, g.Idx(s.Right, s.Y)})
 		}
-		if s.Right < g.W-1 {
-			p.addFallLink(i, s.Right, s.Y, +1)
-		}
-		p.addClimbLinks(i, s.Left, s.Y, -1)
-		p.addClimbLinks(i, s.Right, s.Y, +1)
-	}
-}
-
-func (p *Plan) addFallLink(fromSurf, edgeX, surfY, dx int) {
-	g := p.g
-
-	offX := edgeX + dx
-	if offX < 0 || offX >= g.W || !g.Cell[g.Idx(offX, surfY)] {
-		return
 	}
 
-	// Track which target surfaces we've already linked to avoid duplicates.
-	var toClean [MaxAG]int
-	nClean := 0
-	minLandY := g.H
+	// For each pair of edges from different surfaces, compute Manhattan.
+	// Keep only the best (shortest) edge pair per surface pair.
+	type candidate struct {
+		from, to       int
+		fromCell, toCell int
+		dist           int
+	}
 
-	for bodyLen := 1; bodyLen <= MaxAG; bodyLen++ {
-		cx := edgeX + dx*bodyLen
-		if cx < 0 || cx >= g.W {
-			break
+	best := make([]candidate, n*n)
+	for i := range best {
+		best[i].dist = maxLinkDist + 1
+	}
+
+	for i := 0; i < len(edges); i++ {
+		for j := 0; j < len(edges); j++ {
+			ei, ej := edges[i], edges[j]
+			if ei.surfID == ej.surfID {
+				continue
+			}
+			d := g.Manhattan(ei.cell, ej.cell)
+			if d > maxLinkDist {
+				continue
+			}
+			key := ei.surfID*n + ej.surfID
+			if d < best[key].dist {
+				best[key] = candidate{ei.surfID, ej.surfID, ei.cell, ej.cell, d}
+			}
 		}
-		cell := g.Idx(cx, surfY)
-		if !g.Cell[cell] {
-			break
-		}
-		if ly := p.LandY[cell]; ly < minLandY {
-			minLandY = ly
-		}
-		if minLandY <= surfY {
+	}
+
+	// Filter: remove links where an intermediate surface edge sits between source and target.
+	for i := range best {
+		c := &best[i]
+		if c.dist > maxLinkDist {
 			continue
 		}
+		for k := 0; k < len(edges); k++ {
+			ek := edges[k]
+			if ek.surfID == c.from || ek.surfID == c.to {
+				continue
+			}
+			if betweenRect(g, c.fromCell, c.toCell, ek.cell) {
+				c.dist = maxLinkDist + 1
+				break
+			}
+		}
+	}
 
-		headX := cx
-		landCell := g.Idx(headX, minLandY)
-		to := p.SurfAt[landCell]
-		if to < 0 || to == fromSurf || p.fallSeen[to] {
+	// Build adjacency list from surviving candidates.
+	for i := range best {
+		c := best[i]
+		if c.dist > maxLinkDist {
 			continue
 		}
-		p.fallSeen[to] = true
-		toClean[nClean] = to
-		nClean++
-		p.SurfAdj[fromSurf] = append(p.SurfAdj[fromSurf], SurfLink{
-			To: to, Cost: bodyLen, MinBody: bodyLen,
+		p.SurfAdj[c.from] = append(p.SurfAdj[c.from], SurfLink{
+			To: c.to, Cost: c.dist, MinBody: c.dist,
+			From: c.fromCell, ToCell: c.toCell,
 		})
-	}
-	for i := 0; i < nClean; i++ {
-		p.fallSeen[toClean[i]] = false
-	}
-}
-
-func (p *Plan) addClimbLinks(fromSurf int, edgeX, surfY, dx int) {
-	g := p.g
-	sideX := edgeX + dx
-	if sideX < 0 || sideX >= g.W {
-		return
-	}
-
-	for h := 1; h < g.H; h++ {
-		climbY := surfY - h
-		if climbY < 0 {
-			break
-		}
-		if !g.Cell[g.Idx(edgeX, climbY)] {
-			break
-		}
-		sideCell := g.Idx(sideX, climbY)
-		if !g.Cell[sideCell] {
-			continue
-		}
-		if to := p.SurfAt[sideCell]; to >= 0 && to != fromSurf {
-			p.SurfAdj[fromSurf] = append(p.SurfAdj[fromSurf], SurfLink{
-				To: to, Cost: h + 1, MinBody: h + 1,
-			})
-		}
 	}
 }
 
@@ -332,7 +316,7 @@ func (p *Plan) SurfDist(from, to, bodyLen int) int {
 // EstimateDist estimates the total turns from a snake to a target cell
 // using body simulation for the first step + surface graph for the rest.
 func (p *Plan) EstimateDist(body []int, target int) (int, int) {
-	g := p.g
+	g := p.G
 	head := body[0]
 	if head < 0 {
 		return -1, -1
@@ -393,45 +377,18 @@ func (p *Plan) EstimateDist(body []int, target int) (int, int) {
 	return bestDist, bestDir
 }
 
-// --- Ground checks (O(1) via apple bitmap) ---
-
-// isGroundedAt returns true if cell c has solid ground directly below it
-// (wall, apple, or grid bottom). Returns false for OOB cells.
-func (p *Plan) isGroundedAt(c int) bool {
-	g := p.g
-	if !g.IsInGrid(c) {
-		return false
-	}
-	_, y := g.XY(c)
-	if y+1 >= g.H {
-		return true
-	}
-	below := c + g.Stride
-	return !g.Cell[below] || p.appleMap[below]
-}
-
-// isApple returns true if cell c contains an apple. Returns false for OOB.
-func (p *Plan) isApple(c int) bool {
-	if !p.g.IsInGrid(c) {
-		return false
-	}
-	return p.appleMap[c]
-}
-
 // --- Fall computation ---
 
 // computeFallWithBody estimates the fall landing when the body extends
 // bodyLen cells in the opposite direction of move d. Returns (landCell, ag).
-// Uses min(LandY) across body columns, checks apples in fall path.
 func (p *Plan) computeFallWithBody(nc int, d int, bodyLen int) (int, int) {
-	g := p.g
+	g := p.G
 	if !g.IsInGrid(nc) {
-		return -1, 0 // OOB head falls out of map
+		return -1, 0
 	}
 	nx, ny := g.XY(nc)
 	bdx, bdy := -Dl[d][0], -Dl[d][1]
 
-	// Find min LandY across all body columns, accounting for apples
 	minLandY := p.LandY[nc]
 	p.clipFallByApples(nx, ny, &minLandY)
 
@@ -458,7 +415,6 @@ func (p *Plan) computeFallWithBody(nc int, d int, bodyLen int) (int, int) {
 
 	headLand := g.Idx(nx, minLandY)
 
-	// Compute ag: scan body segments from head, find first grounded after landing
 	drop := minLandY - ny
 	for i := 0; i < bodyLen; i++ {
 		bx := nx + bdx*i
@@ -466,7 +422,6 @@ func (p *Plan) computeFallWithBody(nc int, d int, bodyLen int) (int, int) {
 		if bx < 0 || bx >= g.W || by < 0 || by >= g.H {
 			break
 		}
-		// Rigid body: all segments drop by the same amount
 		landBy := by + drop
 		if landBy >= g.H {
 			continue
@@ -478,10 +433,8 @@ func (p *Plan) computeFallWithBody(nc int, d int, bodyLen int) (int, int) {
 	return headLand, 0
 }
 
-// clipFallByApples reduces *landY if any apple in column cx between cy+1
-// and *landY would intercept the fall (apple acts as ground).
 func (p *Plan) clipFallByApples(cx, cy int, landY *int) {
-	g := p.g
+	g := p.G
 	for ay := cy + 1; ay <= *landY; ay++ {
 		if p.appleMap[g.Idx(cx, ay)] {
 			if ay-1 < *landY {
@@ -492,18 +445,9 @@ func (p *Plan) clipFallByApples(cx, cy int, landY *int) {
 	}
 }
 
-// --- BFS ---
-
-// neckOf returns the cell index of body[1] (neck), or -1 if not available.
-func neckOf(body []int) int {
-	if len(body) > 1 && body[1] >= 0 {
-		return body[1]
-	}
-	return -1
-}
+// --- BFS helpers ---
 
 // initialAG computes the starting above-ground counter for a snake body.
-// Scans HEAD-to-TAIL: ag = index of the first grounded segment.
 func (p *Plan) initialAG(body []int) int {
 	for i := 0; i < len(body); i++ {
 		if body[i] >= 0 && p.isGroundedAt(body[i]) {
@@ -513,256 +457,15 @@ func (p *Plan) initialAG(body []int) int {
 	return len(body)
 }
 
-// simulateMove applies engine-compatible movement for a single snake against
-// static walls, apples, and its own body. It resolves the move and beheading
-// but does not apply falling.
-func (p *Plan) simulateMove(body []int, d int) ([]int, bool) {
-	g := p.g
-	if len(body) == 0 {
-		return nil, false
-	}
-
-	hx, hy := g.CellXY(body[0])
-	nx := hx + Dl[d][0]
-	ny := hy + Dl[d][1]
-	newHead := g.CellIdx(nx, ny)
-
-	eating := p.isApple(newHead)
-	newLen := len(body)
-	if eating && newLen < MaxSeg {
-		newLen++
-	}
-
-	newBody := p.firstMoveBuf[:newLen]
-	newBody[0] = newHead
-	if eating {
-		copy(newBody[1:], body)
-	} else if len(body) > 1 {
-		copy(newBody[1:], body[:len(body)-1])
-	}
-
-	hitWall := g.IsInGrid(newHead) && !g.Cell[newHead]
-	hitBody := false
-	if newHead >= 0 {
-		for i := 1; i < newLen; i++ {
-			if newBody[i] == newHead {
-				hitBody = true
-				break
-			}
-		}
-	}
-
-	if hitWall || hitBody {
-		if newLen <= 3 {
-			return nil, false
-		}
-		return newBody[1:newLen], true
-	}
-
-	return newBody, true
-}
-
-func bodyContains(body []int, cell int) bool {
-	for _, part := range body {
-		if part == cell {
-			return true
-		}
-	}
-	return false
-}
-
-func (p *Plan) stepCell(cell int, d int) int {
-	if cell < 0 {
-		return -1
-	}
-	x, y := p.g.CellXY(cell)
-	return p.g.CellIdx(x+Dl[d][0], y+Dl[d][1])
-}
-
-func (p *Plan) hasTileOrAppleUnder(cell int, eaten []bool) bool {
-	if cell < 0 {
-		return false
-	}
-	below := p.stepCell(cell, DD)
-	if p.g.IsInGrid(below) {
-		if !p.g.Cell[below] {
-			return true
-		}
-		return p.appleMap[below] && !eaten[below]
-	}
-	return false
-}
-
-func (p *Plan) isGroundedForResolve(body []int, snakes []Snake, grounded []bool, eaten []bool) bool {
-	for _, cell := range body {
-		if p.hasTileOrAppleUnder(cell, eaten) {
-			return true
-		}
-		below := p.stepCell(cell, DD)
-		if below < 0 {
-			continue
-		}
-		for i := range snakes {
-			if !grounded[i] || !snakes[i].Alive {
-				continue
-			}
-			if bodyContains(snakes[i].Body, below) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (p *Plan) allOutOfBounds(body []int) bool {
-	for _, cell := range body {
-		if cell < 0 {
-			continue
-		}
-		_, y := p.g.CellXY(cell)
-		if y < p.g.H+1 {
-			return false
-		}
-	}
-	return true
-}
-
-// resolveMove resolves engine-compatible post-move state for all snakes and
-// returns the cells of apples eaten by moved heads this turn.
-// Input bodies must already reflect the simultaneous movement step:
-// head added, tail popped unless an apple was eaten.
-func (p *Plan) resolveMove(snakes []Snake) []int {
-	if len(snakes) == 0 {
-		return nil
-	}
-
-	p.RebuildAppleMap()
-	eaten := make([]bool, p.g.NCells)
-	eatenList := make([]int, 0, len(snakes))
-	for i := range snakes {
-		if !snakes[i].Alive || len(snakes[i].Body) == 0 {
-			continue
-		}
-		head := snakes[i].Body[0]
-		if p.g.IsInGrid(head) && p.appleMap[head] {
-			if !eaten[head] {
-				eaten[head] = true
-				eatenList = append(eatenList, head)
-			}
-		}
-	}
-
-	toBehead := make([]bool, len(snakes))
-	for i := range snakes {
-		sn := &snakes[i]
-		if !sn.Alive || len(sn.Body) == 0 {
-			continue
-		}
-
-		head := sn.Body[0]
-		isInWall := p.g.IsInGrid(head) && !p.g.Cell[head]
-		isInBody := false
-
-		for j := range snakes {
-			other := &snakes[j]
-			if !other.Alive || len(other.Body) == 0 || !bodyContains(other.Body, head) {
-				continue
-			}
-			if i != j {
-				isInBody = true
-				break
-			}
-			if bodyContains(other.Body[1:], head) {
-				isInBody = true
-				break
-			}
-		}
-
-		if isInWall || isInBody {
-			toBehead[i] = true
-		}
-	}
-
-	for i := range snakes {
-		if !toBehead[i] {
-			continue
-		}
-		if len(snakes[i].Body) <= 3 {
-			snakes[i].Alive = false
-			snakes[i].Body = nil
-			snakes[i].Len = 0
-			continue
-		}
-		snakes[i].Body = snakes[i].Body[1:]
-		snakes[i].Len = len(snakes[i].Body)
-	}
-
-	airborne := make([]bool, len(snakes))
-	grounded := make([]bool, len(snakes))
-	for i := range snakes {
-		if snakes[i].Alive && len(snakes[i].Body) > 0 {
-			airborne[i] = true
-		}
-	}
-
-	for {
-		somethingFell := false
-		for {
-			somethingGotGrounded := false
-			for i := range snakes {
-				if !airborne[i] {
-					continue
-				}
-				if p.isGroundedForResolve(snakes[i].Body, snakes, grounded, eaten) {
-					grounded[i] = true
-					airborne[i] = false
-					somethingGotGrounded = true
-				}
-			}
-			if !somethingGotGrounded {
-				break
-			}
-		}
-
-		for i := range snakes {
-			if !airborne[i] {
-				continue
-			}
-			somethingFell = true
-			for bi, cell := range snakes[i].Body {
-				snakes[i].Body[bi] = p.stepCell(cell, DD)
-			}
-			if p.allOutOfBounds(snakes[i].Body) {
-				snakes[i].Alive = false
-				snakes[i].Body = nil
-				snakes[i].Len = 0
-				airborne[i] = false
-			}
-		}
-
-		if !somethingFell {
-			break
-		}
-	}
-
-	for i := range snakes {
-		if snakes[i].Alive {
-			snakes[i].Len = len(snakes[i].Body)
-		}
-	}
-	return eatenList
-}
-
 // simulateFirstMove computes the actual head position after moving in
 // direction d with full body simulation (movement + falling).
 func (p *Plan) simulateFirstMove(body []int, d int) (int, int) {
-	g := p.g
+	g := p.G
 	newBody, alive := p.simulateMove(body, d)
 	if !alive || len(newBody) == 0 {
 		return -1, 0
 	}
 
-	// Check if any segment is grounded
 	grounded := false
 	for _, c := range newBody {
 		if c >= 0 && p.isGroundedAt(c) {
@@ -772,7 +475,6 @@ func (p *Plan) simulateFirstMove(body []int, d int) (int, int) {
 	}
 
 	if !grounded {
-		// Compute fall: min drop across in-grid body segments
 		minDrop := g.H
 		for _, c := range newBody {
 			if !g.IsInGrid(c) {
@@ -786,13 +488,12 @@ func (p *Plan) simulateFirstMove(body []int, d int) (int, int) {
 		if minDrop <= 0 {
 			return newBody[0], p.initialAG(newBody)
 		}
-		// Apply fall to all segments (grid + OOB)
 		for i, c := range newBody {
 			if c < 0 {
 				continue
 			}
-			cx, cy := g.CellXY(c)
-			newBody[i] = g.CellIdx(cx, cy+minDrop)
+			cx, cy := g.XY(c)
+			newBody[i] = g.Idx(cx, cy+minDrop)
 		}
 		head := newBody[0]
 		if head < 0 || head >= g.NCells {
@@ -802,349 +503,4 @@ func (p *Plan) simulateFirstMove(body []int, d int) (int, int) {
 	}
 
 	return newBody[0], p.initialAG(newBody)
-}
-
-// BFSFindAll runs chain-aware BFS (tracks apple eating along path).
-func (p *Plan) BFSFindAll(body []int) []PathResult {
-	return p.bfsFindAll(body, true)
-}
-
-// BFSFindAllSimple runs BFS without chain tracking (faster, for enemies).
-func (p *Plan) BFSFindAllSimple(body []int) []PathResult {
-	return p.bfsFindAll(body, false)
-}
-
-// bfsFindAll runs a single BFS from the snake's head, exploring all reachable
-// cells. The FIRST step uses exact body simulation. Subsequent steps use the
-// (cell, ag, eaten) approximation — eating apples increases effective body
-// length, enabling longer unsupported bridges. Returns results indexed by cell.
-func (p *Plan) bfsFindAll(body []int, trackChain bool) []PathResult {
-	g := p.g
-	n := g.NCells
-	bodyLen := len(body)
-	if bodyLen == 0 {
-		return nil
-	}
-	head := body[0]
-	if !g.IsInGrid(head) {
-		return nil // OOB or invalid head — can't BFS
-	}
-
-	maxAG := bodyLen
-	if maxAG > MaxAG {
-		maxAG = MaxAG
-	}
-
-	// Rebuild apple bitmap for this turn's state
-	p.RebuildAppleMap()
-
-	results := make([]PathResult, n)
-	for i := range results {
-		results[i].Dist = -1
-	}
-
-	p.curGen++
-	if p.curGen == 0 {
-		for i := range p.visitGen {
-			p.visitGen[i] = 0
-		}
-		p.curGen = 1
-	}
-
-	stride := MaxChainEaten + 1 // eaten dimension size
-
-	neck := neckOf(body)
-	results[head] = PathResult{Dist: 0, FirstDir: -1}
-	startAG := p.initialAG(body)
-	if startAG >= maxAG {
-		startAG = maxAG - 1
-	}
-	p.visitGen[(head*MaxAG+startAG)*stride] = p.curGen
-
-	// Seed BFS with accurate first moves (full body simulation)
-	p.queue = p.queue[:0]
-	for d := 0; d < 4; d++ {
-		nc := g.Nbm[head][d]
-		if nc == -1 || nc == neck {
-			continue
-		}
-
-		// Detect apple eating on first move
-		var firstEaten int8
-		if trackChain && p.isApple(nc) {
-			firstEaten = 1
-		}
-
-		finalCell, nag := p.simulateFirstMove(body, d)
-		if finalCell < 0 || finalCell >= g.NCells {
-			continue
-		}
-		eMaxAG := maxAG + int(firstEaten)
-		if eMaxAG > MaxAG {
-			eMaxAG = MaxAG
-		}
-		if nag >= eMaxAG {
-			nag = eMaxAG - 1
-		}
-		vk := (finalCell*MaxAG+nag)*stride + int(firstEaten)
-		if p.visitGen[vk] == p.curGen {
-			continue
-		}
-		p.visitGen[vk] = p.curGen
-		if g.IsInGrid(finalCell) {
-			r := &results[finalCell]
-			if r.Dist == -1 {
-				*r = PathResult{Dist: 1, FirstDir: d, Apples: int(firstEaten)}
-			}
-		}
-		p.queue = append(p.queue, bfsNode{
-			cell: int16(finalCell), ag: int8(nag),
-			firstDir: int8(d), dist: 1,
-			eaten: firstEaten,
-		})
-	}
-
-	// Main BFS loop
-	for qi := 0; qi < len(p.queue); qi++ {
-		cur := p.queue[qi]
-		cc := int(cur.cell)
-		cag := int(cur.ag)
-
-		for d := 0; d < 4; d++ {
-			nc := g.Nbm[cc][d]
-			if nc == -1 {
-				continue
-			}
-
-			// Track apple eating: stepping onto an apple grows body by 1.
-			newEaten := cur.eaten
-			if trackChain && p.isApple(nc) && newEaten < MaxChainEaten {
-				newEaten++
-			}
-
-			effectiveBodyLen := bodyLen + int(newEaten)
-			eMaxAG := effectiveBodyLen
-			if eMaxAG > MaxAG {
-				eMaxAG = MaxAG
-			}
-
-			var nag int
-			finalCell := nc
-
-			if p.isGroundedAt(nc) {
-				nag = 0
-			} else {
-				nag = cag + 1
-			}
-
-			if nag >= eMaxAG {
-				// Apple eating: body grows +1, may prevent fall.
-				// In chain mode this is handled by increased eMaxAG.
-				// In simple mode, restore the one-step apple-prevents-fall logic.
-				if !trackChain && p.isApple(nc) && nag < eMaxAG+1 {
-					nag = cag
-				} else {
-					var fallAG int
-					finalCell, fallAG = p.computeFallWithBody(nc, d, effectiveBodyLen)
-					nag = fallAG
-					if finalCell < 0 || finalCell >= g.NCells {
-						continue
-					}
-				}
-			}
-
-			if finalCell < 0 || finalCell >= g.NCells {
-				continue
-			}
-			vk := (finalCell*MaxAG+nag)*stride + int(newEaten)
-			if p.visitGen[vk] == p.curGen {
-				continue
-			}
-			p.visitGen[vk] = p.curGen
-
-			fd := int(cur.firstDir)
-			newDist := cur.dist + 1
-
-			if g.IsInGrid(finalCell) {
-				r := &results[finalCell]
-				if r.Dist == -1 || (int(newDist) == r.Dist && int(newEaten) > r.Apples) {
-					r.Dist = int(newDist)
-					r.FirstDir = fd
-					r.Apples = int(newEaten)
-				}
-			}
-			p.queue = append(p.queue, bfsNode{
-				cell: int16(finalCell), ag: int8(nag),
-				firstDir: int8(fd), dist: newDist,
-				eaten: newEaten,
-			})
-		}
-	}
-
-	return results
-}
-
-// --- SimBFS: body-simulation search for nearest reachable apples ---
-
-const (
-	simMaxTargets  = 5 // stop after finding this many apple targets
-	simMaxEatDepth = 2 // apple eating grows body only within this many steps
-)
-
-// SimTarget describes a physically reachable apple found by SimBFS.
-type SimTarget struct {
-	Apple    int // apple cell index
-	Dist     int // steps to reach
-	FirstDir int // direction of first move
-	Eaten    int // total apples eaten on path (including this one)
-}
-
-type simNode struct {
-	body     []int
-	dist     int
-	firstDir int
-	eaten    int
-}
-
-func bodyHash(body []int) uint64 {
-	h := uint64(14695981039346656037)
-	h ^= uint64(len(body))
-	h *= 1099511628211
-	for _, c := range body {
-		h ^= uint64(c)
-		h *= 1099511628211
-	}
-	return h
-}
-
-// applyGravity drops body segments until grounded. Returns false if fell off map.
-func (p *Plan) applyGravity(body []int) bool {
-	g := p.g
-	for iter := 0; iter < g.H; iter++ {
-		for _, c := range body {
-			if c >= 0 && p.isGroundedAt(c) {
-				return true
-			}
-		}
-		allOOB := true
-		for i, c := range body {
-			if c < 0 {
-				continue
-			}
-			cx, cy := g.CellXY(c)
-			nc := g.CellIdx(cx, cy+1)
-			if nc < 0 {
-				return false
-			}
-			body[i] = nc
-			if g.IsInGrid(nc) {
-				allOOB = false
-			}
-		}
-		if allOOB {
-			return false
-		}
-	}
-	return false
-}
-
-// SimBFS searches for nearest reachable apples using actual body simulation.
-// Uses simulateMove for physics, rejects moves causing death or segment loss.
-// Apple eating grows body only within simMaxEatDepth steps.
-func (p *Plan) SimBFS(body []int) []SimTarget {
-	g := p.g
-	if len(body) == 0 || !g.IsInGrid(body[0]) {
-		return nil
-	}
-
-	p.RebuildAppleMap()
-
-	visited := make(map[uint64]bool)
-	visited[bodyHash(body)] = true
-	queue := []simNode{{
-		body:     append([]int(nil), body...),
-		firstDir: -1,
-	}}
-	var targets []SimTarget
-
-	for qi := 0; qi < len(queue) && len(targets) < simMaxTargets; qi++ {
-		cur := queue[qi]
-		head := cur.body[0]
-		if !g.IsInGrid(head) {
-			continue
-		}
-		neck := neckOf(cur.body)
-
-		for dir := 0; dir < 4; dir++ {
-			nc := g.Nbm[head][dir]
-			if nc == -1 || nc == neck {
-				continue
-			}
-
-			// Simulate move (movement + collision + eating).
-			newBody, alive := p.simulateMove(cur.body, dir)
-			if !alive {
-				continue
-			}
-
-			// Copy immediately (simulateMove returns firstMoveBuf slice).
-			bodycp := append([]int(nil), newBody...)
-
-			// Detect eating and segment loss.
-			eating := p.isApple(nc)
-			expectedLen := len(cur.body)
-			if eating {
-				expectedLen++
-			}
-			if len(bodycp) < expectedLen {
-				continue // segment loss — reject
-			}
-
-			// Beyond eat depth: undo body growth (score the apple, don't grow).
-			if eating && cur.dist >= simMaxEatDepth {
-				bodycp = bodycp[:len(bodycp)-1]
-			}
-
-			// Apply gravity.
-			if !p.applyGravity(bodycp) {
-				continue
-			}
-
-			fd := cur.firstDir
-			if fd == -1 {
-				fd = dir
-			}
-			newDist := cur.dist + 1
-			newEaten := cur.eaten
-
-			// Visited check.
-			h := bodyHash(bodycp)
-			if visited[h] {
-				continue
-			}
-			visited[h] = true
-
-			// Record apple target.
-			if eating {
-				newEaten++
-				targets = append(targets, SimTarget{
-					Apple:    nc,
-					Dist:     newDist,
-					FirstDir: fd,
-					Eaten:    newEaten,
-				})
-				if len(targets) >= simMaxTargets {
-					return targets
-				}
-			}
-
-			queue = append(queue, simNode{
-				body:     bodycp,
-				dist:     newDist,
-				firstDir: fd,
-				eaten:    newEaten,
-			})
-		}
-	}
-	return targets
 }

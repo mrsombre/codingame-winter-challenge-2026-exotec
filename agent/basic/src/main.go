@@ -19,16 +19,16 @@ func main() {
 	s.Buffer(make([]byte, 1000000), 1000000)
 
 	g := Init(s)
-	p := &Plan{g: g}
+	p := &Plan{Sim: NewSim(g)}
 	p.Precompute()
 	bot := &Decision{G: g, P: p}
 
 	// first turn: read + precompute within 1s budget
-	g.Read(s)
+	g.Turn(s)
 	bot.Decide()
 
 	for {
-		g.Read(s)
+		g.Turn(s)
 		bot.Decide()
 	}
 }

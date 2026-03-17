@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -10,6 +11,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 )
+
+func TestMain(m *testing.M) {
+	debug = false
+	os.Exit(m.Run())
+}
 
 const testSeed int64 = -4514697363674281500
 const testLeague = 3
@@ -47,7 +53,7 @@ func testGameFull(opts ...int64) *Game {
 	lines = append(lines, engine.SerializeFrameInfoFor(p0, eg)...)
 	s := bufio.NewScanner(strings.NewReader(strings.Join(lines, "\n")))
 	g := Init(s)
-	g.Read(s)
+	g.Turn(s)
 	return g
 }
 
@@ -65,19 +71,6 @@ func testGridInput(lines []string) *Game {
 	s := bufio.NewScanner(strings.NewReader(strings.Join(all, "\n")))
 	g := Init(s)
 	return g
-}
-
-func testMovePlan(gridLines []string, apples [][2]int) (*Game, *Plan) {
-	g := testGridInput(gridLines)
-	p := &Plan{g: g}
-	g.Ap = g.Ap[:0]
-	for _, a := range apples {
-		g.Ap = append(g.Ap, g.Idx(a[0], a[1]))
-	}
-	g.ANum = len(g.Ap)
-	p.Precompute()
-	p.RebuildAppleMap()
-	return g, p
 }
 
 // --- Dl, Dn ---
@@ -133,50 +126,68 @@ func TestInit(t *testing.T) {
 }
 
 func TestIsWall(t *testing.T) {
-	g := testGame()
+	g := testGridInput([]string{
+		"..#",
+		"...",
+		"#..",
+	})
 
-	// row 0: all free
-	assert.Equal(t, true, g.Cell[g.Idx(0, 0)], "cell (0,0) should be free")
-	// row 6: ..........#......#.......... — position 10 is '#'
-	assert.Equal(t, false, g.Cell[g.Idx(10, 6)], "cell (10,6) should be wall")
+	tests := []struct {
+		x, y int
+		free bool
+		msg  string
+	}{
+		{0, 0, true, "(0,0) free"},
+		{1, 0, true, "(1,0) free"},
+		{2, 0, false, "(2,0) wall"},
+		{1, 1, true, "(1,1) free"},
+		{0, 2, false, "(0,2) wall"},
+		{2, 2, true, "(2,2) free"},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.free, g.Cell[g.Idx(tt.x, tt.y)], tt.msg)
+	}
 }
 
 func TestNeighbors(t *testing.T) {
-	g := testGame()
+	// 5x4 grid; walls at (1,0) and (3,2)
+	g := testGridInput([]string{
+		".#...",
+		".....",
+		"...#.",
+		".....",
+	})
 
-	// Nb: all neighbors have real indices, -1 only at expanded grid edge
 	tests := []struct {
-		name string
-		x, y int
+		name    string
+		x, y    int
 		wantNb  [4]int // [UP, RIGHT, DOWN, LEFT]
 		wantNbm [4]int // valid moves (no walls)
 	}{
-		{"corner top-left", 0, 0,
+		// (0,0) corner: right neighbor is wall (1,0)
+		{"top-left, wall right", 0, 0,
 			[4]int{g.Idx(0, -1), g.Idx(1, 0), g.Idx(0, 1), g.Idx(-1, 0)},
-			[4]int{g.Idx(0, -1), g.Idx(1, 0), g.Idx(0, 1), g.Idx(-1, 0)}},
-		{"corner top-right", 27, 0,
-			[4]int{g.Idx(27, -1), g.Idx(28, 0), g.Idx(27, 1), g.Idx(26, 0)},
-			[4]int{g.Idx(27, -1), g.Idx(28, 0), g.Idx(27, 1), g.Idx(26, 0)}},
-		// (0,14) wall: UP/RIGHT are walls → Nb has indices, Nbm has -1
-		{"corner bot-left", 0, 14,
-			[4]int{g.Idx(0, 13), g.Idx(1, 14), g.Idx(0, 15), g.Idx(-1, 14)},
-			[4]int{-1, -1, g.Idx(0, 15), g.Idx(-1, 14)}},
-		// (27,14) wall: UP/LEFT are walls
-		{"corner bot-right", 27, 14,
-			[4]int{g.Idx(27, 13), g.Idx(28, 14), g.Idx(27, 15), g.Idx(26, 14)},
-			[4]int{-1, g.Idx(28, 14), g.Idx(27, 15), -1}},
-		// (10,1) all free
-		{"all free", 10, 1,
-			[4]int{g.Idx(10, 0), g.Idx(11, 1), g.Idx(10, 2), g.Idx(9, 1)},
-			[4]int{g.Idx(10, 0), g.Idx(11, 1), g.Idx(10, 2), g.Idx(9, 1)}},
-		// (10,6) wall cell: Nb has all neighbors, Nbm = -1 for self (wall) neighbors check not needed — Nbm filters wall AT neighbor
-		{"wall cell", 10, 6,
-			[4]int{g.Idx(10, 5), g.Idx(11, 6), g.Idx(10, 7), g.Idx(9, 6)},
-			[4]int{g.Idx(10, 5), g.Idx(11, 6), g.Idx(10, 7), g.Idx(9, 6)}},
-		// (5,13) free but walls below/left
-		{"near bottom", 5, 13,
-			[4]int{g.Idx(5, 12), g.Idx(6, 13), g.Idx(5, 14), g.Idx(4, 13)},
-			[4]int{g.Idx(5, 12), g.Idx(6, 13), -1, -1}},
+			[4]int{g.Idx(0, -1), -1, g.Idx(0, 1), g.Idx(-1, 0)}},
+		// (4,3) corner: all neighbors free (border is free)
+		{"bottom-right, all free", 4, 3,
+			[4]int{g.Idx(4, 2), g.Idx(5, 3), g.Idx(4, 4), g.Idx(3, 3)},
+			[4]int{g.Idx(4, 2), g.Idx(5, 3), g.Idx(4, 4), g.Idx(3, 3)}},
+		// (2,0) left neighbor is wall (1,0)
+		{"wall to left", 2, 0,
+			[4]int{g.Idx(2, -1), g.Idx(3, 0), g.Idx(2, 1), g.Idx(1, 0)},
+			[4]int{g.Idx(2, -1), g.Idx(3, 0), g.Idx(2, 1), -1}},
+		// (2,1) all neighbors free
+		{"interior all free", 2, 1,
+			[4]int{g.Idx(2, 0), g.Idx(3, 1), g.Idx(2, 2), g.Idx(1, 1)},
+			[4]int{g.Idx(2, 0), g.Idx(3, 1), g.Idx(2, 2), g.Idx(1, 1)}},
+		// (2,2) right neighbor is wall (3,2)
+		{"wall to right", 2, 2,
+			[4]int{g.Idx(2, 1), g.Idx(3, 2), g.Idx(2, 3), g.Idx(1, 2)},
+			[4]int{g.Idx(2, 1), -1, g.Idx(2, 3), g.Idx(1, 2)}},
+		// (3,1) down neighbor is wall (3,2)
+		{"wall below", 3, 1,
+			[4]int{g.Idx(3, 0), g.Idx(4, 1), g.Idx(3, 2), g.Idx(2, 1)},
+			[4]int{g.Idx(3, 0), g.Idx(4, 1), -1, g.Idx(2, 1)}},
 	}
 	for _, tt := range tests {
 		idx := g.Idx(tt.x, tt.y)
@@ -185,44 +196,9 @@ func TestNeighbors(t *testing.T) {
 	}
 }
 
-// --- XY ---
+// --- Turn ---
 
-func TestIdxXYRoundtrip(t *testing.T) {
-	g := testGame()
-
-	for y := 0; y < g.H; y++ {
-		for x := 0; x < g.W; x++ {
-			rx, ry := g.XY(g.Idx(x, y))
-			assert.Equal(t, x, rx)
-			assert.Equal(t, y, ry)
-		}
-	}
-}
-
-// --- IsMy ---
-
-func TestIsMy(t *testing.T) {
-	g := testGame()
-
-	tests := []struct {
-		id   int
-		want bool
-	}{
-		{0, true},
-		{1, true},
-		{2, true},
-		{3, false},
-		{4, false},
-		{5, false},
-	}
-	for _, tt := range tests {
-		assert.Equal(t, tt.want, g.IsMy(tt.id), "IsMy(%d)", tt.id)
-	}
-}
-
-// --- Read ---
-
-func TestRead(t *testing.T) {
+func TestTurn(t *testing.T) {
 	g := testGameFull()
 
 	// verify initial state from engine (new 28x15 map has 30 apples)
@@ -240,7 +216,7 @@ func TestRead(t *testing.T) {
 		"0 17,10:16,10:16,11:16,12",
 		"3 11,9:11,10:11,11",
 	}, "\n")
-	g.Read(bufio.NewScanner(strings.NewReader(turn2)))
+	g.Turn(bufio.NewScanner(strings.NewReader(turn2)))
 
 	// apples reduced
 	assert.Equal(t, 2, g.ANum)
@@ -263,7 +239,13 @@ func TestRead(t *testing.T) {
 // --- ParseBody ---
 
 func TestParseBody(t *testing.T) {
-	g := testGame()
+	g := testGridInput([]string{
+		".....",
+		".....",
+		".....",
+		".....",
+		".....",
+	})
 
 	tests := []struct {
 		name    string
@@ -273,27 +255,27 @@ func TestParseBody(t *testing.T) {
 	}{
 		{
 			"single cell",
-			"5,3",
+			"3,2",
 			1,
-			[]int{g.Idx(5, 3)},
+			[]int{g.Idx(3, 2)},
 		},
 		{
-			"three cells",
+			"horizontal body",
 			"0,0:1,0:2,0",
 			3,
 			[]int{g.Idx(0, 0), g.Idx(1, 0), g.Idx(2, 0)},
 		},
 		{
 			"vertical body",
-			"10,5:10,6:10,7:10,8",
+			"2,1:2,2:2,3:2,4",
 			4,
-			[]int{g.Idx(10, 5), g.Idx(10, 6), g.Idx(10, 7), g.Idx(10, 8)},
+			[]int{g.Idx(2, 1), g.Idx(2, 2), g.Idx(2, 3), g.Idx(2, 4)},
 		},
 		{
-			"two digit coords",
-			"17,0:17,1:17,2",
+			"L-shaped body",
+			"4,0:4,1:3,1",
 			3,
-			[]int{g.Idx(17, 0), g.Idx(17, 1), g.Idx(17, 2)},
+			[]int{g.Idx(4, 0), g.Idx(4, 1), g.Idx(3, 1)},
 		},
 	}
 	for _, tt := range tests {
@@ -305,3 +287,72 @@ func TestParseBody(t *testing.T) {
 	}
 }
 
+// --- XY ---
+
+func TestIdxXYRoundtrip(t *testing.T) {
+	g := testGridInput([]string{
+		"....",
+		"....",
+		"....",
+	})
+
+	for y := 0; y < g.H; y++ {
+		for x := 0; x < g.W; x++ {
+			rx, ry := g.XY(g.Idx(x, y))
+			assert.Equal(t, x, rx)
+			assert.Equal(t, y, ry)
+		}
+	}
+}
+
+// --- IsInGrid ---
+
+func TestIsInGrid(t *testing.T) {
+	g := testGridInput([]string{
+		"...",
+		"...",
+	})
+
+	tests := []struct {
+		name string
+		cell int
+		want bool
+	}{
+		{"in grid", g.Idx(1, 0), true},
+		{"corner", g.Idx(0, 0), true},
+		{"border OOB", g.Idx(-1, 0), false},
+		{"below grid", g.Idx(0, 2), false},
+		{"negative", -1, false},
+		{"past end", g.NCells, false},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, g.IsInGrid(tt.cell), tt.name)
+	}
+}
+
+// --- IsMy ---
+
+func TestIsMy(t *testing.T) {
+	g := testGridInput([]string{
+		"...",
+		"...",
+	})
+	g.MyN = 2
+	g.MyIDs = [MaxPSn]int{0, 1}
+	g.OpN = 2
+	g.OpIDs = [MaxPSn]int{2, 3}
+
+	tests := []struct {
+		id   int
+		want bool
+	}{
+		{0, true},
+		{1, true},
+		{2, false},
+		{3, false},
+		{7, false},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, g.IsMy(tt.id), "IsMy(%d)", tt.id)
+	}
+}

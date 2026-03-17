@@ -149,39 +149,21 @@ func Init(s *bufio.Scanner) *Game {
 	return g
 }
 
-// Idx converts game coordinates to expanded flat index.
-func (g *Game) Idx(x, y int) int {
-	if x < -g.Oob || x >= g.W+g.Oob || y < -g.Oob || y >= g.H+g.Oob {
-		return -1
+// ParseBody parses "x,y:x,y:x,y" into flat cell indices.
+// OOB segments get -1.
+func (g *Game) ParseBody(s string) []int {
+	dst := make([]int, 0, 8)
+	for _, seg := range strings.Split(s, ":") {
+		comma := strings.IndexByte(seg, ',')
+		x, _ := strconv.Atoi(seg[:comma])
+		y, _ := strconv.Atoi(seg[comma+1:])
+		dst = append(dst, g.Idx(x, y))
 	}
-	return (y+g.Oob)*g.Stride + (x + g.Oob)
+	return dst
 }
 
-// XY converts expanded flat index to game coordinates.
-func (g *Game) XY(idx int) (int, int) {
-	return idx%g.Stride - g.Oob, idx/g.Stride - g.Oob
-}
-
-func (g *Game) CellIdx(x, y int) int { return g.Idx(x, y) }
-
-func (g *Game) CellXY(idx int) (int, int) { return g.XY(idx) }
-
-func (g *Game) IsInGrid(cell int) bool {
-	return cell >= 0 && cell < g.NCells && g.InGrid[cell]
-}
-
-// IsMy returns true if id belongs to my snakes.
-func (g *Game) IsMy(id int) bool {
-	for i := 0; i < g.MyN; i++ {
-		if g.MyIDs[i] == id {
-			return true
-		}
-	}
-	return false
-}
-
-// Read reads per-turn data from scanner: apples and snakes.
-func (g *Game) Read(s *bufio.Scanner) {
+// Turn reads per-turn data from scanner: apples and snakes.
+func (g *Game) Turn(s *bufio.Scanner) {
 	// apples
 	s.Scan()
 	fmt.Sscan(s.Text(), &g.ANum)
@@ -221,6 +203,33 @@ func (g *Game) Read(s *bufio.Scanner) {
 	}
 }
 
+// Idx converts game coordinates to expanded flat index.
+func (g *Game) Idx(x, y int) int {
+	if x < -g.Oob || x >= g.W+g.Oob || y < -g.Oob || y >= g.H+g.Oob {
+		return -1
+	}
+	return (y+g.Oob)*g.Stride + (x + g.Oob)
+}
+
+// XY converts expanded flat index to game coordinates.
+func (g *Game) XY(idx int) (int, int) {
+	return idx%g.Stride - g.Oob, idx/g.Stride - g.Oob
+}
+
+func (g *Game) IsInGrid(cell int) bool {
+	return cell >= 0 && cell < g.NCells && g.InGrid[cell]
+}
+
+// IsMy returns true if id belongs to my snakes.
+func (g *Game) IsMy(id int) bool {
+	for i := 0; i < g.MyN; i++ {
+		if g.MyIDs[i] == id {
+			return true
+		}
+	}
+	return false
+}
+
 // Manhattan returns the Manhattan distance between two cells.
 func (g *Game) Manhattan(a, b int) int {
 	ax, ay := g.XY(a)
@@ -234,17 +243,4 @@ func (g *Game) Manhattan(a, b int) int {
 		dy = -dy
 	}
 	return dx + dy
-}
-
-// ParseBody parses "x,y:x,y:x,y" into flat cell indices.
-// OOB segments get -1.
-func (g *Game) ParseBody(s string) []int {
-	dst := make([]int, 0, 8)
-	for _, seg := range strings.Split(s, ":") {
-		comma := strings.IndexByte(seg, ',')
-		x, _ := strconv.Atoi(seg[:comma])
-		y, _ := strconv.Atoi(seg[comma+1:])
-		dst = append(dst, g.Idx(x, y))
-	}
-	return dst
 }
