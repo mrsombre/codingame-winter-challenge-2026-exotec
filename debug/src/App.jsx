@@ -2,12 +2,8 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 
 // Layer: default (apples + snakes)
-function layerDefault(key, { appleSet, snakeMap }) {
-  const isApple = appleSet.has(key)
+function layerDefault(key, { snakeMap }) {
   const snake = snakeMap[key]
-
-  let bg = ''
-  if (isApple) bg = 'bg-yellow-400'
 
   const content = snake ? (
     <div
@@ -17,7 +13,7 @@ function layerDefault(key, { appleSet, snakeMap }) {
     />
   ) : null
 
-  return { bg, content, outline: null }
+  return { bg: '', content, outline: null }
 }
 
 // Layer: surfaces
@@ -101,41 +97,11 @@ export default function App() {
   const renderLayer = showSurfaces ? layerSurfaces : layerDefault
 
   return (
-    <div className="flex gap-4 p-4 font-mono h-screen justify-center">
-      <div className="w-48 shrink-0 pt-4 text-sm">
-        {hover && (
-          <div>
-            <p>cell: {hover.x},{hover.y}</p>
-            {showSurfaces && surfMap[`${hover.x},${hover.y}`] !== undefined && (() => {
-              const s = surfaces[surfMap[`${hover.x},${hover.y}`]]
-              return (
-                <div className="mt-2 text-purple-400">
-                  <p className="font-bold">surface #{s.id}</p>
-                  <p>y: {s.y}</p>
-                  <p>x: {s.left}..{s.right}</p>
-                  <p>len: {s.len}</p>
-                  <p>edges: ({s.left},{s.y}){s.len > 1 ? ` (${s.right},${s.y})` : ''}</p>
-                  <p>links: {s.links.length}</p>
-                  {s.links.length > 0 && (
-                    <div className="mt-1 text-[11px]">
-                      {s.links.map((l, i) => (
-                        <p key={i}>→ S{l.to} d={l.len}</p>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )
-            })()}
-          </div>
-        )}
-      </div>
-      <div className="flex-1 flex items-center justify-center" style={{ maxHeight: '80vh' }}>
+    <div className="flex gap-2 p-2 font-mono h-screen">
+      <div className="flex-1 min-w-0 flex items-center justify-center h-full overflow-hidden p-1">
+        <div className="h-full" style={{ aspectRatio: `${w} / ${h}`, maxWidth: '100%' }}>
         <table
-          className="border-collapse"
-          style={{
-            height: '80vh',
-            aspectRatio: `${w} / ${h}`,
-          }}
+          className="border-collapse w-full h-full"
         >
           <tbody>
             <tr>
@@ -169,6 +135,7 @@ export default function App() {
                     )
                   }
 
+                  const isApple = appleSet.has(key)
                   const { bg, content, outline } = renderLayer(key, layerCtx)
 
                   return (
@@ -179,6 +146,7 @@ export default function App() {
                         width: `${100 / w}%`,
                         padding: 0,
                         ...(outline || {}),
+                        ...(isApple ? { backgroundColor: 'rgba(250, 204, 21, 0.5)' } : {}),
                       }}
                       onMouseEnter={() => setHover({ x, y })}
                       onMouseLeave={() => setHover(null)}
@@ -204,35 +172,49 @@ export default function App() {
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
-      <div className="w-40 shrink-0 pt-4 text-sm">
-        <p>w: {w}</p>
-        <p>h: {h}</p>
-        <p>walls: {walls.length}</p>
-        <p>apples: {apples.length}</p>
+      <div className="min-w-0 w-[20%] shrink pt-4 text-sm overflow-y-auto overflow-x-hidden">
+        <p>w: {w} h: {h}</p>
+        <p>walls: {walls.length} apples: {apples.length}</p>
         <p>snakes: {snakes.length}</p>
-        <div className="mt-4 flex flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-blue-500" /> wall
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-yellow-400" /> apple
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-purple-500 rounded-full" /> p0
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-green-500 rounded-full" /> p1
-          </div>
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+          <div className="flex items-center gap-1"><div className="w-3 h-3 bg-blue-500" /> wall</div>
+          <div className="flex items-center gap-1"><div className="w-3 h-3 bg-yellow-400" /> apple</div>
+          <div className="flex items-center gap-1"><div className="w-3 h-3 bg-purple-500 rounded-full" /> p0</div>
+          <div className="flex items-center gap-1"><div className="w-3 h-3 bg-green-500 rounded-full" /> p1</div>
         </div>
         <Button
           variant={showSurfaces ? 'default' : 'outline'}
           size="sm"
-          className="mt-4 cursor-pointer"
+          className="mt-3 cursor-pointer"
           onClick={() => setShowSurfaces(!showSurfaces)}
         >
           surfaces {showSurfaces ? 'on' : 'off'}
         </Button>
+        {hover && (
+          <div className="mt-4 border-t pt-2">
+            <p>cell: {hover.x},{hover.y}</p>
+            {showSurfaces && surfMap[`${hover.x},${hover.y}`] !== undefined && (() => {
+              const s = surfaces[surfMap[`${hover.x},${hover.y}`]]
+              return (
+                <div className="mt-2 text-purple-400">
+                  <p className="font-bold">surface #{s.id}</p>
+                  <p>y: {s.y} x: {s.left}..{s.right} len: {s.len}</p>
+                  <p>edges: ({s.left},{s.y}){s.len > 1 ? ` (${s.right},${s.y})` : ''}</p>
+                  <p>links: {s.links.length}</p>
+                  {s.links.length > 0 && (
+                    <div className="mt-1 text-[11px]">
+                      {s.links.map((l, i) => (
+                        <p key={i}>→ S{l.to} d={l.len}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+          </div>
+        )}
       </div>
     </div>
   )

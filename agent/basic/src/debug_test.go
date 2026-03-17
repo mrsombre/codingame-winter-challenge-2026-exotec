@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-const debugSeed int64 = -9093555897832026000
+const debugSeed int64 = 2633570716462326000
 const debugLeague = 3
 
 var debugOutDir = filepath.Join("..", "..", "..", "debug", "public")
@@ -34,6 +34,7 @@ func debugWriteJSON(t *testing.T, name string, v any) {
 
 func TestPrintMap(t *testing.T) {
 	g := testGameFull(debugSeed, int64(debugLeague))
+	g.InitAppleSurfaces()
 
 	type LinkJSON struct {
 		To      int          `json:"to"`
@@ -48,6 +49,7 @@ func TestPrintMap(t *testing.T) {
 		Left  int        `json:"left"`
 		Right int        `json:"right"`
 		Len   int        `json:"len"`
+		Type  string     `json:"type"`
 		Links []LinkJSON `json:"links"`
 	}
 
@@ -110,12 +112,19 @@ func TestPrintMap(t *testing.T) {
 				Path:    path,
 			}
 		}
+		stype := "solid"
+		if s.Type == SurfApple {
+			stype = "apple"
+		} else if s.Type == SurfNone {
+			stype = "none"
+		}
 		surfs[i] = SurfJSON{
 			ID:    s.ID,
 			Y:     s.Y,
 			Left:  s.Left,
 			Right: s.Right,
 			Len:   s.Len,
+			Type:  stype,
 			Links: links,
 		}
 	}
