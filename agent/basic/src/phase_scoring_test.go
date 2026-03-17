@@ -23,7 +23,8 @@ func TestScoring_Dimensions(t *testing.T) {
 	}
 }
 
-// All reachable apples should have positive scores.
+// Apples scored positive must be BFS-reachable; apples scored -1 are either
+// BFS-unreachable or surface-gated (body too short to reach that surface).
 func TestScoring_ReachablePositive(t *testing.T) {
 	g, _, d := testDecision()
 	d.phaseBFS()
@@ -32,11 +33,11 @@ func TestScoring_ReachablePositive(t *testing.T) {
 
 	for si := range d.MySnakes {
 		for j := 0; j < g.ANum; j++ {
-			bfs := d.BFS[si]
-			ap := g.Ap[j]
-			if bfs != nil && bfs[ap].Dist >= 0 {
-				assert.True(t, d.Scores[si][j] > 0,
-					"snake %d → apple %d: reachable but score=%d",
+			if d.Scores[si][j] > 0 {
+				bfs := d.BFS[si]
+				ap := g.Ap[j]
+				assert.True(t, bfs != nil && bfs[ap].Dist >= 0,
+					"snake %d → apple %d: scored %d but BFS unreachable",
 					d.MySnakes[si], j, d.Scores[si][j])
 			}
 		}
@@ -66,7 +67,7 @@ func TestScoring_UnreachableNegative(t *testing.T) {
 }
 
 // Closer apple scores higher than farther apple (same snake, similar conditions).
-// Snake 0 (head 3,8): apple (5,9) is close, apple (19,1) is far.
+// Snake 0 (head 16,10): apple (15,10) is close (dist=1), apple (0,1) is far (dist=25).
 func TestScoring_CloserBeatsfarther(t *testing.T) {
 	g, _, d := testDecision()
 	d.phaseBFS()
@@ -102,7 +103,7 @@ func TestScoring_CloserBeatsfarther(t *testing.T) {
 	t.Logf("farthest apple[%d] dist=%d score=%d", maxJ, maxDist, d.Scores[0][maxJ])
 }
 
-// Apple (9,9) is enemy territory (inf=-3), apple (12,9) is my territory (inf=+3).
+// Apple (9,9) is enemy territory (inf=-2), apple (18,9) is my territory (inf=+2).
 // For a snake equidistant, my-territory apple should score higher.
 func TestScoring_MyTerritoryBeatsEnemy(t *testing.T) {
 	g, _, d := testDecision()
@@ -111,20 +112,20 @@ func TestScoring_MyTerritoryBeatsEnemy(t *testing.T) {
 	d.phaseScoring()
 
 	cell99 := g.Idx(9, 9)
-	cell129 := g.Idx(12, 9)
+	cell189 := g.Idx(18, 9)
 
 	// Find apple indices.
-	j99, j129 := -1, -1
+	j99, j189 := -1, -1
 	for j := 0; j < g.ANum; j++ {
 		if g.Ap[j] == cell99 {
 			j99 = j
 		}
-		if g.Ap[j] == cell129 {
-			j129 = j
+		if g.Ap[j] == cell189 {
+			j189 = j
 		}
 	}
 	assert.NotEqual(t, -1, j99)
-	assert.NotEqual(t, -1, j129)
+	assert.NotEqual(t, -1, j189)
 
 	// Check across all snakes that can reach both: my-territory apple scores higher.
 	for si := range d.MySnakes {
@@ -132,19 +133,19 @@ func TestScoring_MyTerritoryBeatsEnemy(t *testing.T) {
 		if bfs == nil {
 			continue
 		}
-		if bfs[cell99].Dist < 0 || bfs[cell129].Dist < 0 {
+		if bfs[cell99].Dist < 0 || bfs[cell189].Dist < 0 {
 			continue
 		}
 		score99 := d.Scores[si][j99]
-		score129 := d.Scores[si][j129]
+		score189 := d.Scores[si][j189]
 
 		// If distances are similar, my-territory should win.
 		dist99 := bfs[cell99].Dist
-		dist129 := bfs[cell129].Dist
-		if abs(dist99-dist129) <= 2 {
-			assert.True(t, score129 > score99,
-				"snake %d: my-territory (12,9) score=%d should beat enemy (9,9) score=%d "+
-					"(dist %d vs %d)", d.MySnakes[si], score129, score99, dist129, dist99)
+		dist189 := bfs[cell189].Dist
+		if abs(dist99-dist189) <= 2 {
+			assert.True(t, score189 > score99,
+				"snake %d: my-territory (18,9) score=%d should beat enemy (9,9) score=%d "+
+					"(dist %d vs %d)", d.MySnakes[si], score189, score99, dist189, dist99)
 		}
 	}
 }
@@ -158,7 +159,7 @@ func TestScoring_InfluencePenalty(t *testing.T) {
 	d.phaseScoring()
 
 	cell := g.Idx(9, 9)
-	assert.Equal(t, -3, d.Influence[cell], "(9,9) influence")
+	assert.Equal(t, -2, d.Influence[cell], "(9,9) influence")
 
 	j99 := -1
 	for j := 0; j < g.ANum; j++ {

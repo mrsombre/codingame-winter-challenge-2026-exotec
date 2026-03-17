@@ -10,7 +10,7 @@ import (
 // Phase 4: Assignment with influence scoring
 // ============================================================
 
-// All 3 snakes should be assigned (12 apples available).
+// All 3 snakes should be assigned (30 apples available).
 // No duplicate assignments. All directions valid.
 func TestAssignment_Valid(t *testing.T) {
 	_, _, d := testDecision()
@@ -40,7 +40,7 @@ func TestAssignment_Valid(t *testing.T) {
 }
 
 // Assigned apples should prefer my territory (positive influence).
-// With 12 apples and 3 snakes, at least 2 of 3 should target my territory.
+// With 30 apples and 3 snakes, at least 2 of 3 should target my territory.
 func TestAssignment_PrefersMyTerritory(t *testing.T) {
 	_, _, d := testDecision()
 	d.phaseBFS()
@@ -59,13 +59,13 @@ func TestAssignment_PrefersMyTerritory(t *testing.T) {
 }
 
 // Verify BFS distance and influence values that feed into Phase 3 scoring.
-// Apple (9,9): BFS dist=6, influence=-3 (enemy territory).
+// Apple (9,9): BFS dist=8 from Snake 0 (head 16,10), influence=-2 (enemy territory).
 func TestAssignment_ScoringInputs(t *testing.T) {
 	g, _, d := testDecision()
 	d.phaseBFS()
 	d.phaseInfluence()
 
 	cell := g.Idx(9, 9)
-	assert.Equal(t, 6, d.BFS[0][cell].Dist, "Snake 0 raw dist to (9,9)")
-	assert.Equal(t, -3, d.Influence[cell], "(9,9) influence")
+	assert.Equal(t, 8, d.BFS[0][cell].Dist, "Snake 0 raw dist to (9,9)")
+	assert.Equal(t, -2, d.Influence[cell], "(9,9) influence")
 }

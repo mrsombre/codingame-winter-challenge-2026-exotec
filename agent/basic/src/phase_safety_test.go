@@ -97,10 +97,10 @@ func TestSafety_OverridesCollision(t *testing.T) {
 	d.phaseScoring()
 	d.phaseAssignment()
 
-	// Snake 0 head at (3,8). Force direction UP → (3,7).
-	// Check if (3,7) has a body — if not, place one conceptually.
-	// Instead, test the mechanism: set assigned to UP (toward ##..## area).
-	// (3,7) is free but phaseSafety should still pick a safe direction.
+	// Snake 0 head at (16,10). Force direction UP → (16,9).
+	// Check if (16,9) has a body — if not, place one conceptually.
+	// Instead, test the mechanism: set assigned to UP.
+	// phaseSafety should still pick a safe direction.
 
 	// Override Snake 0's direction to UP to test safety override.
 	d.AssignedDir[0] = DU

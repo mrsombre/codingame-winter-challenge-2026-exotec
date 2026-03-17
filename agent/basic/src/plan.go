@@ -1,9 +1,12 @@
 package main
 
+const MaxChainEaten = 5 // max apples tracked along a BFS path
+
 // PathResult holds the output of a BFS search for a single target.
 type PathResult struct {
 	Dist     int // BFS steps to reach target (-1 if unreachable)
 	FirstDir int // direction of the first move (DU/DR/DD/DL)
+	Apples   int // apples eaten along the BFS path to this cell
 }
 
 type bfsNode struct {
@@ -11,6 +14,7 @@ type bfsNode struct {
 	ag       int8 // above-ground counter (0 = grounded)
 	firstDir int8 // direction of the very first step (-1 at start)
 	dist     int16
+	eaten    int8 // apples consumed along this path
 }
 
 // Surface represents a horizontal platform segment where snakes can walk.
@@ -51,7 +55,7 @@ type Plan struct {
 	appleMapN    int   // count of previous entries
 
 	// BFS reuse buffers
-	visitGen     []uint16 // flat [cell*MaxAG + ag], generation counter
+	visitGen     []uint16 // flat [(cell*MaxAG+ag)*(MaxChainEaten+1)+eaten]
 	curGen       uint16
 	queue        []bfsNode
 	firstMoveBuf []int // scratch for single-snake move simulation
@@ -65,7 +69,7 @@ func (p *Plan) Precompute() {
 	p.SurfAt = make([]int, n)
 	p.appleMap = make([]bool, n)
 	p.appleMapPrev = make([]int, MaxAp)
-	p.visitGen = make([]uint16, p.g.NCells*MaxAG)
+	p.visitGen = make([]uint16, p.g.NCells*MaxAG*(MaxChainEaten+1))
 	p.firstMoveBuf = make([]int, MaxSeg)
 	p.computeLandY()
 	p.detectSurfaces()
@@ -801,10 +805,21 @@ func (p *Plan) simulateFirstMove(body []int, d int) (int, int) {
 	return newBody[0], p.initialAG(newBody)
 }
 
-// BFSFindAll runs a single BFS from the snake's head, exploring all reachable
-// cells. The FIRST step uses exact body simulation. Subsequent steps use the
-// (cell, ag) approximation. Returns results indexed by cell.
+// BFSFindAll runs chain-aware BFS (tracks apple eating along path).
 func (p *Plan) BFSFindAll(body []int) []PathResult {
+	return p.bfsFindAll(body, true)
+}
+
+// BFSFindAllSimple runs BFS without chain tracking (faster, for enemies).
+func (p *Plan) BFSFindAllSimple(body []int) []PathResult {
+	return p.bfsFindAll(body, false)
+}
+
+// bfsFindAll runs a single BFS from the snake's head, exploring all reachable
+// cells. The FIRST step uses exact body simulation. Subsequent steps use the
+// (cell, ag, eaten) approximation — eating apples increases effective body
+// length, enabling longer unsupported bridges. Returns results indexed by cell.
+func (p *Plan) bfsFindAll(body []int, trackChain bool) []PathResult {
 	g := p.g
 	n := g.W * g.H
 	bodyLen := len(body)
@@ -837,13 +852,15 @@ func (p *Plan) BFSFindAll(body []int) []PathResult {
 		p.curGen = 1
 	}
 
+	stride := MaxChainEaten + 1 // eaten dimension size
+
 	neck := neckOf(body)
 	results[head] = PathResult{Dist: 0, FirstDir: -1}
 	startAG := p.initialAG(body)
 	if startAG >= maxAG {
 		startAG = maxAG - 1
 	}
-	p.visitGen[head*MaxAG+startAG] = p.curGen
+	p.visitGen[(head*MaxAG+startAG)*stride] = p.curGen
 
 	// Seed BFS with accurate first moves (full body simulation)
 	p.queue = p.queue[:0]
@@ -852,23 +869,39 @@ func (p *Plan) BFSFindAll(body []int) []PathResult {
 		if nc == -1 || nc == neck {
 			continue
 		}
+
+		// Detect apple eating on first move
+		var firstEaten int8
+		if trackChain && nc >= 0 && nc < n && p.isApple(nc) {
+			firstEaten = 1
+		}
+
 		finalCell, nag := p.simulateFirstMove(body, d)
 		if finalCell < 0 || finalCell >= g.NCells {
 			continue
 		}
-		if nag >= maxAG {
-			nag = maxAG - 1
+		eMaxAG := maxAG + int(firstEaten)
+		if eMaxAG > MaxAG {
+			eMaxAG = MaxAG
 		}
-		if p.visitGen[finalCell*MaxAG+nag] == p.curGen {
+		if nag >= eMaxAG {
+			nag = eMaxAG - 1
+		}
+		vk := (finalCell*MaxAG+nag)*stride + int(firstEaten)
+		if p.visitGen[vk] == p.curGen {
 			continue
 		}
-		p.visitGen[finalCell*MaxAG+nag] = p.curGen
-		if finalCell < n && results[finalCell].Dist == -1 {
-			results[finalCell] = PathResult{Dist: 1, FirstDir: d}
+		p.visitGen[vk] = p.curGen
+		if finalCell < n {
+			r := &results[finalCell]
+			if r.Dist == -1 {
+				*r = PathResult{Dist: 1, FirstDir: d, Apples: int(firstEaten)}
+			}
 		}
 		p.queue = append(p.queue, bfsNode{
 			cell: int16(finalCell), ag: int8(nag),
 			firstDir: int8(d), dist: 1,
+			eaten: firstEaten,
 		})
 	}
 
@@ -884,6 +917,18 @@ func (p *Plan) BFSFindAll(body []int) []PathResult {
 				continue
 			}
 
+			// Track apple eating: stepping onto an apple grows body by 1.
+			newEaten := cur.eaten
+			if trackChain && nc >= 0 && nc < n && p.isApple(nc) && newEaten < MaxChainEaten {
+				newEaten++
+			}
+
+			effectiveBodyLen := bodyLen + int(newEaten)
+			eMaxAG := effectiveBodyLen
+			if eMaxAG > MaxAG {
+				eMaxAG = MaxAG
+			}
+
 			var nag int
 			finalCell := nc
 
@@ -893,13 +938,15 @@ func (p *Plan) BFSFindAll(body []int) []PathResult {
 				nag = cag + 1
 			}
 
-			if nag >= maxAG {
-				// Apple eating: body grows +1, may prevent fall
-				if p.isApple(nc) && nag < maxAG+1 {
+			if nag >= eMaxAG {
+				// Apple eating: body grows +1, may prevent fall.
+				// In chain mode this is handled by increased eMaxAG.
+				// In simple mode, restore the one-step apple-prevents-fall logic.
+				if !trackChain && p.isApple(nc) && nag < eMaxAG+1 {
 					nag = cag
 				} else {
 					var fallAG int
-					finalCell, fallAG = p.computeFallWithBody(nc, d, bodyLen)
+					finalCell, fallAG = p.computeFallWithBody(nc, d, effectiveBodyLen)
 					nag = fallAG
 					if finalCell < 0 || finalCell >= g.NCells {
 						continue
@@ -910,23 +957,197 @@ func (p *Plan) BFSFindAll(body []int) []PathResult {
 			if finalCell < 0 || finalCell >= g.NCells {
 				continue
 			}
-			if p.visitGen[finalCell*MaxAG+nag] == p.curGen {
+			vk := (finalCell*MaxAG+nag)*stride + int(newEaten)
+			if p.visitGen[vk] == p.curGen {
 				continue
 			}
-			p.visitGen[finalCell*MaxAG+nag] = p.curGen
+			p.visitGen[vk] = p.curGen
 
 			fd := int(cur.firstDir)
 			newDist := cur.dist + 1
 
-			if finalCell < n && results[finalCell].Dist == -1 {
-				results[finalCell] = PathResult{Dist: int(newDist), FirstDir: fd}
+			if finalCell < n {
+				r := &results[finalCell]
+				if r.Dist == -1 || (int(newDist) == r.Dist && int(newEaten) > r.Apples) {
+					r.Dist = int(newDist)
+					r.FirstDir = fd
+					r.Apples = int(newEaten)
+				}
 			}
 			p.queue = append(p.queue, bfsNode{
 				cell: int16(finalCell), ag: int8(nag),
 				firstDir: int8(fd), dist: newDist,
+				eaten: newEaten,
 			})
 		}
 	}
 
 	return results
+}
+
+// --- SimBFS: body-simulation search for nearest reachable apples ---
+
+const (
+	simMaxTargets  = 5 // stop after finding this many apple targets
+	simMaxEatDepth = 2 // apple eating grows body only within this many steps
+)
+
+// SimTarget describes a physically reachable apple found by SimBFS.
+type SimTarget struct {
+	Apple    int // apple cell index
+	Dist     int // steps to reach
+	FirstDir int // direction of first move
+	Eaten    int // total apples eaten on path (including this one)
+}
+
+type simNode struct {
+	body     []int
+	dist     int
+	firstDir int
+	eaten    int
+}
+
+func bodyHash(body []int) uint64 {
+	h := uint64(14695981039346656037)
+	h ^= uint64(len(body))
+	h *= 1099511628211
+	for _, c := range body {
+		h ^= uint64(c)
+		h *= 1099511628211
+	}
+	return h
+}
+
+// applyGravity drops body segments until grounded. Returns false if fell off map.
+func (p *Plan) applyGravity(body []int) bool {
+	g := p.g
+	n := g.W * g.H
+	for iter := 0; iter < g.H; iter++ {
+		for _, c := range body {
+			if c >= 0 && c < n && p.isGroundedAt(c) {
+				return true
+			}
+		}
+		allOOB := true
+		for i, c := range body {
+			if c < 0 {
+				continue
+			}
+			cx, cy := g.CellXY(c)
+			nc := g.CellIdx(cx, cy+1)
+			if nc < 0 {
+				return false
+			}
+			body[i] = nc
+			if nc < n {
+				allOOB = false
+			}
+		}
+		if allOOB {
+			return false
+		}
+	}
+	return false
+}
+
+// SimBFS searches for nearest reachable apples using actual body simulation.
+// Uses simulateMove for physics, rejects moves causing death or segment loss.
+// Apple eating grows body only within simMaxEatDepth steps.
+func (p *Plan) SimBFS(body []int) []SimTarget {
+	g := p.g
+	n := g.W * g.H
+	if len(body) == 0 || body[0] < 0 || body[0] >= n {
+		return nil
+	}
+
+	p.RebuildAppleMap()
+
+	visited := make(map[uint64]bool)
+	visited[bodyHash(body)] = true
+	queue := []simNode{{
+		body:     append([]int(nil), body...),
+		firstDir: -1,
+	}}
+	var targets []SimTarget
+
+	for qi := 0; qi < len(queue) && len(targets) < simMaxTargets; qi++ {
+		cur := queue[qi]
+		head := cur.body[0]
+		if head < 0 || head >= n {
+			continue
+		}
+		neck := neckOf(cur.body)
+
+		for dir := 0; dir < 4; dir++ {
+			nc := g.Nb[head][dir]
+			if nc == -1 || nc == neck {
+				continue
+			}
+
+			// Simulate move (movement + collision + eating).
+			newBody, alive := p.simulateMove(cur.body, dir)
+			if !alive {
+				continue
+			}
+
+			// Copy immediately (simulateMove returns firstMoveBuf slice).
+			bodycp := append([]int(nil), newBody...)
+
+			// Detect eating and segment loss.
+			eating := nc >= 0 && nc < n && p.isApple(nc)
+			expectedLen := len(cur.body)
+			if eating {
+				expectedLen++
+			}
+			if len(bodycp) < expectedLen {
+				continue // segment loss — reject
+			}
+
+			// Beyond eat depth: undo body growth (score the apple, don't grow).
+			if eating && cur.dist >= simMaxEatDepth {
+				bodycp = bodycp[:len(bodycp)-1]
+			}
+
+			// Apply gravity.
+			if !p.applyGravity(bodycp) {
+				continue
+			}
+
+			fd := cur.firstDir
+			if fd == -1 {
+				fd = dir
+			}
+			newDist := cur.dist + 1
+			newEaten := cur.eaten
+
+			// Visited check.
+			h := bodyHash(bodycp)
+			if visited[h] {
+				continue
+			}
+			visited[h] = true
+
+			// Record apple target.
+			if eating {
+				newEaten++
+				targets = append(targets, SimTarget{
+					Apple:    nc,
+					Dist:     newDist,
+					FirstDir: fd,
+					Eaten:    newEaten,
+				})
+				if len(targets) >= simMaxTargets {
+					return targets
+				}
+			}
+
+			queue = append(queue, simNode{
+				body:     bodycp,
+				dist:     newDist,
+				firstDir: fd,
+				eaten:    newEaten,
+			})
+		}
+	}
+	return targets
 }

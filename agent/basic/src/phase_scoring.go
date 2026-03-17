@@ -22,6 +22,7 @@ const (
 	scoreClusterR  = 5    // Manhattan radius to count nearby apples
 	scoreCluster   = 80   // per nearby apple
 	scoreRace      = 150  // per-turn enemy lead penalty
+	scoreChain     = 200  // per intermediate apple on the BFS path
 )
 
 func (d *Decision) phaseScoring() {
@@ -74,25 +75,25 @@ func (d *Decision) phaseScoring() {
 	}
 
 	// --- Score each (snake, apple) pair ---
+	// Only apples confirmed reachable by SimBFS are scored.
 
 	for si := 0; si < numMy; si++ {
-		bfs := d.BFS[si]
-		if bfs == nil {
-			for j := 0; j < numAp; j++ {
-				d.Scores[si][j] = -1
-			}
-			continue
+		// Build SimBFS apple lookup: apple cell → SimTarget.
+		simMap := make(map[int]SimTarget)
+		for _, st := range d.SimTargets[si] {
+			simMap[st.Apple] = st
 		}
 
 		for j := 0; j < numAp; j++ {
 			ap := g.Ap[j]
-			r := bfs[ap]
-			if r.Dist < 0 {
+
+			st, reachable := simMap[ap]
+			if !reachable {
 				d.Scores[si][j] = -1
 				continue
 			}
 
-			dist := r.Dist
+			dist := st.Dist
 
 			// Base: inverse distance (closer = higher).
 			base := scoreBase / (1 + dist)
@@ -122,7 +123,13 @@ func (d *Decision) phaseScoring() {
 				race = (dist - opd) * scoreRace
 			}
 
-			s := base + safety + excl + height + cluster - race
+			// Chain: bonus for intermediate apples collected en route.
+			chain := 0
+			if st.Eaten > 1 {
+				chain = (st.Eaten - 1) * scoreChain
+			}
+
+			s := base + safety + excl + height + cluster + chain - race
 			if s < 1 {
 				s = 1 // reachable apples always score positive
 			}

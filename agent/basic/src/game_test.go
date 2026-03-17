@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const testSeed int64 = -6896487110651623000
+const testSeed int64 = -4514697363674281500
 
 // testGame creates a Game initialized from engine-generated grid (Init only, no turn data).
 func testGame() *Game {
@@ -61,9 +61,9 @@ func TestDirName(t *testing.T) {
 func TestInit(t *testing.T) {
 	g := testGameFull()
 
-	// grid dimensions: 22x12
-	assert.Equal(t, 22, g.W)
-	assert.Equal(t, 12, g.H)
+	// grid dimensions: 28x15
+	assert.Equal(t, 28, g.W)
+	assert.Equal(t, 15, g.H)
 
 	// snake IDs
 	assert.Equal(t, 3, g.MyN)
@@ -76,20 +76,20 @@ func TestInit(t *testing.T) {
 	assert.Equal(t, 5, g.OpIDs[2])
 
 	// apples
-	assert.Equal(t, 12, g.ANum)
-	assert.Equal(t, g.Idx(9, 9), g.Ap[0])
-	assert.Equal(t, g.Idx(12, 9), g.Ap[1])
+	assert.Equal(t, 30, g.ANum)
+	assert.Equal(t, g.Idx(20, 9), g.Ap[0])
+	assert.Equal(t, g.Idx(7, 9), g.Ap[1])
 
 	// snakes
 	assert.Equal(t, 6, g.SNum)
 	assert.Equal(t, 0, g.Sn[0].ID)
 	assert.Equal(t, 0, g.Sn[0].Owner)
 	assert.Equal(t, 3, g.Sn[0].Len)
-	assert.Equal(t, g.Idx(3, 8), g.Sn[0].Body[0])
+	assert.Equal(t, g.Idx(16, 10), g.Sn[0].Body[0])
 	assert.Equal(t, 5, g.Sn[5].ID)
 	assert.Equal(t, 1, g.Sn[5].Owner)
 	assert.Equal(t, 3, g.Sn[5].Len)
-	assert.Equal(t, g.Idx(5, 0), g.Sn[5].Body[0])
+	assert.Equal(t, g.Idx(22, 6), g.Sn[5].Body[0])
 }
 
 func TestIsWall(t *testing.T) {
@@ -97,30 +97,32 @@ func TestIsWall(t *testing.T) {
 
 	// row 0: all free
 	assert.Equal(t, true, g.Cell[g.Idx(0, 0)], "cell (0,0) should be free")
-	// row 3: ....##...####...##.... — position 4 is '#'
-	assert.Equal(t, false, g.Cell[g.Idx(4, 3)], "cell (4,3) should be wall")
+	// row 6: ..........#......#.......... — position 10 is '#'
+	assert.Equal(t, false, g.Cell[g.Idx(10, 6)], "cell (10,6) should be wall")
 }
 
 func TestNeighbors(t *testing.T) {
 	g := testGame()
 
-	// W=22, H=12, OobBase=264
-	// OOB layout: top(264+x), bottom(286+x), left(308+y), right(320+y)
+	// W=28, H=15, OobBase=420
+	// OOB layout: top(420+x), bottom(448+x), left(476+y), right(491+y)
 	tests := []struct {
 		name string
 		x, y int
 		want [4]int // [UP, RIGHT, DOWN, LEFT]
 	}{
-		{"corner top-left", 0, 0, [4]int{264, 1, 22, 308}},
-		{"corner top-right", 21, 0, [4]int{285, 320, 43, 20}},
-		{"corner bot-left", 0, 11, [4]int{-1, -1, 286, 319}},
-		{"corner bot-right", 21, 11, [4]int{-1, 331, 307, -1}},
-		// (10,1) all free neighbors — unchanged
-		{"all free", 10, 1, [4]int{10, 33, 54, 31}},
-		// (10,11) wall: UP/RIGHT/LEFT walls, DOWN=OOB bottom border
-		{"wall with oob", 10, 11, [4]int{-1, -1, 296, -1}},
-		// (4,3)='#': UP=(4,2) free, RIGHT=(5,3) wall, DOWN=(4,4) free, LEFT=(3,3) free
-		{"mixed wall", 4, 3, [4]int{48, -1, 92, 69}},
+		{"corner top-left", 0, 0, [4]int{420, 1, 28, 476}},
+		{"corner top-right", 27, 0, [4]int{447, 491, 55, 26}},
+		// (0,14) wall: UP/RIGHT walls, DOWN=OOB bottom, LEFT=OOB left
+		{"corner bot-left", 0, 14, [4]int{-1, -1, 448, 490}},
+		// (27,14) wall: UP/LEFT walls, RIGHT=OOB right, DOWN=OOB bottom
+		{"corner bot-right", 27, 14, [4]int{-1, 505, 475, -1}},
+		// (10,1) all free neighbors
+		{"all free", 10, 1, [4]int{10, 39, 66, 37}},
+		// (10,6) wall: all four adjacent cells are free
+		{"wall cell", 10, 6, [4]int{150, 179, 206, 177}},
+		// (5,13) free but surrounded by walls below/left
+		{"near bottom", 5, 13, [4]int{341, 370, -1, -1}},
 	}
 	for _, tt := range tests {
 		nb := g.Nb[g.Idx(tt.x, tt.y)]
@@ -168,21 +170,21 @@ func TestIsMy(t *testing.T) {
 func TestRead(t *testing.T) {
 	g := testGameFull()
 
-	// verify initial state from engine
-	assert.Equal(t, 12, g.ANum)
+	// verify initial state from engine (new 28x15 map has 30 apples)
+	assert.Equal(t, 30, g.ANum)
 	assert.Equal(t, 6, g.SNum)
 	assert.Equal(t, 3, g.Sn[0].Len)
 	assert.Equal(t, 3, g.Sn[5].Len)
 
 	// simulate second turn: snake 0 grew, some apples eaten
 	turn := &testTurnInput{
-		Apples: [][2]int{{9, 9}, {12, 9}},
+		Apples: [][2]int{{9, 9}, {18, 9}},
 		Snakes: []struct {
 			ID   int
 			Body [][2]int
 		}{
-			{0, [][2]int{{3, 7}, {3, 8}, {3, 9}, {3, 10}}},
-			{3, [][2]int{{18, 7}, {18, 8}, {18, 9}}},
+			{0, [][2]int{{17, 10}, {16, 10}, {16, 11}, {16, 12}}},
+			{3, [][2]int{{11, 9}, {11, 10}, {11, 11}}},
 		},
 	}
 	g.Read(turn.Scanner())
@@ -190,19 +192,19 @@ func TestRead(t *testing.T) {
 	// apples reduced
 	assert.Equal(t, 2, g.ANum)
 	assert.Equal(t, g.Idx(9, 9), g.Ap[0])
-	assert.Equal(t, g.Idx(12, 9), g.Ap[1])
+	assert.Equal(t, g.Idx(18, 9), g.Ap[1])
 
 	// snake 0 grew from 3 to 4
 	assert.Equal(t, 0, g.Sn[0].ID)
 	assert.Equal(t, 0, g.Sn[0].Owner)
 	assert.Equal(t, 4, g.Sn[0].Len)
-	assert.Equal(t, g.Idx(3, 7), g.Sn[0].Body[0])
+	assert.Equal(t, g.Idx(17, 10), g.Sn[0].Body[0])
 
 	// snake 3 (opponent)
 	assert.Equal(t, 3, g.Sn[1].ID)
 	assert.Equal(t, 1, g.Sn[1].Owner)
 	assert.Equal(t, 3, g.Sn[1].Len)
-	assert.Equal(t, g.Idx(18, 7), g.Sn[1].Body[0])
+	assert.Equal(t, g.Idx(11, 9), g.Sn[1].Body[0])
 }
 
 // --- ParseBody ---

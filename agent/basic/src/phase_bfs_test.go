@@ -28,7 +28,7 @@ func TestPhaseBFS_BothSides(t *testing.T) {
 	}
 }
 
-// Snake 0 (mine, head 3,8) should still reach (9,9) in 6 steps
+// Snake 0 (mine, head 16,10) should reach (18,9) in 4 steps going RIGHT
 // after running BFS for all snakes (not just mine).
 func TestPhaseBFS_Snake0_Dist(t *testing.T) {
 	g, _, d := testDecision()
@@ -36,7 +36,7 @@ func TestPhaseBFS_Snake0_Dist(t *testing.T) {
 
 	// Snake 0 is first in MySnakes
 	bfs := d.BFS[0]
-	target := g.Idx(9, 9)
-	assert.Equal(t, 6, bfs[target].Dist, "Snake 0 → (9,9) dist")
-	assert.Equal(t, DR, bfs[target].FirstDir, "Snake 0 → (9,9) dir")
+	target := g.Idx(18, 9)
+	assert.Equal(t, 4, bfs[target].Dist, "Snake 0 → (18,9) dist")
+	assert.Equal(t, DR, bfs[target].FirstDir, "Snake 0 → (18,9) dir")
 }
