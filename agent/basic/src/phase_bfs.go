@@ -22,7 +22,13 @@ type BFSResult struct {
 // If neckCheck is true, blocks directions that would move the head into body[1].
 // Returns []ReachInfo sorted by Dist ascending.
 func surfaceReach(g *Game, sn *Snake, neckCheck bool) []ReachInfo {
+	if sn == nil || len(sn.Body) == 0 {
+		return nil
+	}
 	head := sn.Body[0]
+	if head < 0 || head >= g.NCells || !g.IsInGrid(head) {
+		return nil
+	}
 	sid := g.SurfAt[head]
 	if sid < 0 || g.Surfs[sid].Type == SurfNone {
 		return nil
@@ -99,6 +105,9 @@ func surfaceReach(g *Game, sn *Snake, neckCheck bool) []ReachInfo {
 		if !appleAlive[link.Apple] {
 			return ReachInfo{}, false
 		}
+		if !canEatAppleLink(sn.Len, link) {
+			return ReachInfo{}, false
+		}
 
 		sx, _ := g.XY(link.Start)
 		moveX := sx - hx
@@ -141,6 +150,9 @@ func surfaceReach(g *Game, sn *Snake, neckCheck bool) []ReachInfo {
 			if !appleAlive[link.Apple] {
 				continue
 			}
+			if !canEatAppleLink(sn.Len, link) {
+				continue
+			}
 			addApple(ReachInfo{
 				Apple:    link.Apple,
 				Dist:     baseDist + link.Len,
@@ -161,6 +173,9 @@ func surfaceReach(g *Game, sn *Snake, neckCheck bool) []ReachInfo {
 	bestDist[sid] = 0
 	for _, link := range surf.Links {
 		if g.Surfs[link.To].Type == SurfNone {
+			continue
+		}
+		if !canTraverseSurfaceLink(g, sn.Len, link) {
 			continue
 		}
 		// link.Path[0] is always surf.Left or surf.Right (edge cell).
@@ -216,6 +231,9 @@ func surfaceReach(g *Game, sn *Snake, neckCheck bool) []ReachInfo {
 			if g.Surfs[link.To].Type == SurfNone {
 				continue
 			}
+			if !canTraverseSurfaceLink(g, sn.Len, link) {
+				continue
+			}
 			enterPenalty := 0
 			if g.Surfs[link.To].Len < 4 {
 				enterPenalty = 2
@@ -243,6 +261,38 @@ func surfaceReach(g *Game, sn *Snake, neckCheck bool) []ReachInfo {
 	return result
 }
 
+func canEatAppleLink(snLen int, link AppleLink) bool {
+	return snLen >= link.Len
+}
+
+func canTraverseSurfaceLink(g *Game, snLen int, link SurfLink) bool {
+	if isStraightFallLink(g, link) {
+		return true
+	}
+	return snLen >= link.Len
+}
+
+func isStraightFallLink(g *Game, link SurfLink) bool {
+	if len(link.Path) < 3 {
+		return false
+	}
+
+	x0, y0 := g.XY(link.Path[0])
+	x1, y1 := g.XY(link.Path[1])
+	if y1 != y0 || (x1 != x0-1 && x1 != x0+1) {
+		return false
+	}
+
+	for i := 2; i < len(link.Path); i++ {
+		px, py := g.XY(link.Path[i-1])
+		cx, cy := g.XY(link.Path[i])
+		if cx != px || cy != py+1 {
+			return false
+		}
+	}
+	return true
+}
+
 func dirBetween(g *Game, from, to int) (int, int) {
 	fx, fy := g.XY(from)
 	tx, ty := g.XY(to)
@@ -265,4 +315,67 @@ func dirIndex(dx, dy int) int {
 }
 
 func (d *Decision) phaseBFS() {
+	g := d.G
+
+	d.MySnakes = d.MySnakes[:0]
+	d.OpSnakes = d.OpSnakes[:0]
+	for i := 0; i < g.SNum; i++ {
+		if !g.Sn[i].Alive || g.Sn[i].Len == 0 {
+			continue
+		}
+		if g.Sn[i].Owner == 0 {
+			d.MySnakes = append(d.MySnakes, i)
+		} else {
+			d.OpSnakes = append(d.OpSnakes, i)
+		}
+	}
+
+	for i := range d.BFS.MyReach {
+		d.BFS.MyReach[i] = nil
+		d.BFS.OpReach[i] = nil
+	}
+
+	if cap(d.Assigned) < len(d.MySnakes) {
+		d.Assigned = make([]int, len(d.MySnakes))
+		d.AssignedDir = make([]int, len(d.MySnakes))
+	} else {
+		d.Assigned = d.Assigned[:len(d.MySnakes)]
+		d.AssignedDir = d.AssignedDir[:len(d.MySnakes)]
+	}
+
+	for i, snIdx := range d.MySnakes {
+		sn := &g.Sn[snIdx]
+		d.BFS.MyReach[i] = surfaceReach(g, sn, true)
+		d.Assigned[i] = -1
+		d.AssignedDir[i] = fallbackDir(g, sn)
+		if len(d.BFS.MyReach[i]) > 0 {
+			d.Assigned[i] = d.BFS.MyReach[i][0].Apple
+			d.AssignedDir[i] = d.BFS.MyReach[i][0].FirstDir
+		}
+	}
+
+	for i, snIdx := range d.OpSnakes {
+		d.BFS.OpReach[i] = surfaceReach(g, &g.Sn[snIdx], false)
+	}
+}
+
+func fallbackDir(g *Game, sn *Snake) int {
+	if sn == nil || sn.Len == 0 || len(sn.Body) == 0 {
+		return DU
+	}
+	head := sn.Body[0]
+	if head < 0 || head >= g.NCells {
+		return DU
+	}
+	neck := -1
+	if sn.Len > 1 {
+		neck = sn.Body[1]
+	}
+	for dir := 0; dir < 4; dir++ {
+		nb := g.Nbm[head][dir]
+		if nb >= 0 && nb != neck {
+			return dir
+		}
+	}
+	return DU
 }

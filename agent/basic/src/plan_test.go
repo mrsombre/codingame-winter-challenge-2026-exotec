@@ -101,8 +101,8 @@ func TestPlanUpdateAppleSurfacesMarksSurfNoneAndRemovesReach(t *testing.T) {
 		ID:    0,
 		Owner: 0,
 		Alive: true,
-		Body:  []int{g.Idx(1, 4)},
-		Len:   1,
+		Body:  []int{g.Idx(1, 4), g.Idx(0, 4), g.Idx(-1, 4)},
+		Len:   3,
 	}
 	reachBefore := surfaceReach(g, sn, true)
 	assert.True(t, hasReachApple(reachBefore, removedApple), "removed apple should be reachable before update")

@@ -8,11 +8,12 @@ import (
 
 // testBFSGame creates a simple 7x5 grid with one solid surface at y=3.
 // Grid layout:
-//   .......   y=0
-//   .......   y=1
-//   .......   y=2
-//   .......   y=3  <- surface x=0..6
-//   #######   y=4
+//
+//	.......   y=0
+//	.......   y=1
+//	.......   y=2
+//	.......   y=3  <- surface x=0..6
+//	#######   y=4
 func testBFSGame() *Game {
 	g := testGridInput([]string{
 		".......",
@@ -73,4 +74,58 @@ func TestSurfaceReachBehindNeckUnreachable(t *testing.T) {
 		assert.NotEqual(t, g.Idx(5, 3), r.Apple,
 			"apple directly blocked by neck with no alternate route should not be found")
 	}
+}
+
+func TestSurfaceReachBlockedByAppleLinkLength(t *testing.T) {
+	g := testGridInput([]string{
+		".......",
+		".......",
+		".......",
+		".......",
+		".......",
+		"#######",
+	})
+	g.Ap = []int{g.Idx(3, 0)}
+	g.ANum = 1
+	g.BuildSurfaceGraph()
+
+	sn := &Snake{
+		ID: 0, Owner: 0, Alive: true,
+		Body: []int{g.Idx(3, 4), g.Idx(2, 4), g.Idx(1, 4)},
+		Len:  3,
+	}
+
+	reach := surfaceReach(g, sn, true)
+	assert.False(t, hasReachApple(reach, g.Idx(3, 0)),
+		"apple link longer than snake length should be rejected")
+}
+
+func TestPhaseBFSPopulatesTargets(t *testing.T) {
+	g := testBFSGame()
+	g.Ap = []int{g.Idx(0, 3)}
+	g.ANum = 1
+	g.BuildSurfaceGraph()
+
+	g.SNum = 2
+	g.Sn[0] = Snake{
+		ID: 0, Owner: 0, Alive: true,
+		Body: []int{g.Idx(1, 3), g.Idx(2, 3), g.Idx(3, 3)},
+		Len:  3,
+	}
+	g.Sn[1] = Snake{
+		ID: 3, Owner: 1, Alive: true,
+		Body: []int{g.Idx(5, 3), g.Idx(4, 3), g.Idx(3, 3)},
+		Len:  3,
+	}
+
+	d := &Decision{G: g, P: &Plan{G: g}}
+	d.phaseBFS()
+
+	assert.Equal(t, []int{0}, d.MySnakes)
+	assert.Equal(t, []int{1}, d.OpSnakes)
+	assert.Len(t, d.BFS.MyReach[0], 1)
+	assert.Equal(t, g.Idx(0, 3), d.BFS.MyReach[0][0].Apple)
+	assert.Equal(t, g.Idx(0, 3), d.Assigned[0])
+	assert.Equal(t, DL, d.AssignedDir[0])
+	assert.Len(t, d.BFS.OpReach[0], 1)
 }
