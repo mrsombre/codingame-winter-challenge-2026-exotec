@@ -15,9 +15,10 @@ const (
 )
 
 const (
-	MaxW     = 45
-	MaxH     = 30
-	MaxCells = MaxW * MaxH
+	MaxW             = 45
+	MaxH             = 30
+	MaxCells         = MaxW * MaxH
+	MaxExpandedCells = (MaxW + 4) * (MaxH + 4) // expanded grid with Oob=2
 )
 
 var Dl = [4][2]int{

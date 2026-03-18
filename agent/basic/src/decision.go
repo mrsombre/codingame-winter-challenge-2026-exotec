@@ -33,7 +33,10 @@ type Decision struct {
 	Assigned    []int // apple cell per MySnakes slot (-1 = none)
 	AssignedDir []int // first direction per MySnakes slot
 
-	BFS BFSResult
+	BFS           BFSResult
+	Influence     [MaxAp]AppleContest    // per-apple contestation data
+	ContestByCell [MaxExpandedCells]int  // cell → contestation category
+	Safety        SafetyScratch          // pre-allocated safety scratch
 }
 
 // Decide runs the full pipeline and prints one line of commands.

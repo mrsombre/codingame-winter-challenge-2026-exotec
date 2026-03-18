@@ -6,6 +6,12 @@ const (
 	greedyReachBonusBase = 200
 	greedyMobilityScore  = 12
 	greedyNoopPenalty    = 150
+
+	// Contestation bonuses applied in greedyHeuristic.
+	// Contestation bonuses: kept small to only affect tie-breaking (dist*20 gap = 20 per hop).
+	heuristicContestMineBonus = 15 // prefer exclusive apples at same distance
+	heuristicContestSharedPen = 0  // no penalty for contested
+	heuristicContestTheirsPen = -5 // slight depriority for exclusive-theirs
 )
 
 type greedyEval struct {
@@ -113,7 +119,28 @@ func (d *Decision) greedyHeuristic(body []int, apples []int) greedyEval {
 		return surfaceReach(d.G, sn, true)
 	})
 
-	if len(reach) > 0 {
+	// Pick best apple considering both distance and contestation.
+	bestAppleScore := -1 << 30
+	for _, ri := range reach {
+		s := greedyReachBonusBase - ri.Dist*20
+		if ri.Apple >= 0 && ri.Apple < MaxExpandedCells {
+			switch d.ContestByCell[ri.Apple] {
+			case ContestMine:
+				s += heuristicContestMineBonus
+			case ContestShared:
+				s += heuristicContestSharedPen
+			case ContestTheirs:
+				s += heuristicContestTheirsPen
+			}
+		}
+		if s > bestAppleScore {
+			bestAppleScore = s
+			apple = ri.Apple
+		}
+	}
+	if bestAppleScore > -1<<30 {
+		score += bestAppleScore
+	} else if len(reach) > 0 {
 		score += greedyReachBonusBase - reach[0].Dist*20
 		apple = reach[0].Apple
 	}
