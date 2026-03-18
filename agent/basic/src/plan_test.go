@@ -6,13 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func testPlan() *Plan {
-	g := testGameFull()
-	p := &Plan{G: g}
-	p.Init()
-	return p
-}
-
 func hasSurfaceLink(s Surface, to int) bool {
 	for _, link := range s.Links {
 		if link.To == to {

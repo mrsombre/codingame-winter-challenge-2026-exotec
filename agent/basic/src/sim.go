@@ -1,5 +1,7 @@
 package main
 
+import "sort"
+
 // Sim holds simulation state and provides engine-compatible
 // movement, collision, and gravity resolution.
 type Sim struct {
@@ -8,15 +10,22 @@ type Sim struct {
 	appleMapPrev []int
 	appleMapN    int
 	moveBuf      []int // scratch for simulateMove
+
+	// obstacle map for SurfBFS (other-snake bodies)
+	obstacleMap     []bool
+	obstacleMapPrev []int
+	obstacleMapN    int
 }
 
 func NewSim(g *Game) *Sim {
 	n := g.NCells
 	return &Sim{
-		G:            g,
-		appleMap:     make([]bool, n),
-		appleMapPrev: make([]int, MaxAp),
-		moveBuf:      make([]int, MaxSeg),
+		G:               g,
+		appleMap:        make([]bool, n),
+		appleMapPrev:    make([]int, MaxAp),
+		moveBuf:         make([]int, MaxSeg),
+		obstacleMap:     make([]bool, n),
+		obstacleMapPrev: make([]int, MaxASn*MaxSeg),
 	}
 }
 
@@ -473,4 +482,215 @@ func (s *Sim) SimBFS(body []int) []SimTarget {
 		}
 	}
 	return targets
+}
+
+// --- SurfBFS ---
+
+const surfMaxDepth = 8 // max commands (moves issued)
+
+// SurfReach describes a physically reachable surface found by SurfBFS.
+type SurfReach struct {
+	SurfID   int   // g.Surfs index
+	Dist     int   // number of commands to reach surface
+	FirstDir int   // direction of first move
+	Landing  int   // head cell when landing on surface
+	Dirs     []int // full sequence of directions taken (len == Dist)
+	Heads    []int // head cell after each step (len == Dist)
+}
+
+type surfNode struct {
+	body     []int
+	dist     int
+	firstDir int // -1 at start
+	prevDir  int // direction taken to reach this node
+	dirs     []int
+	heads    []int
+}
+
+// isTailMovable returns true if a snake's tail will vacate next turn
+// (i.e. it won't eat an apple this turn).
+func (s *Sim) isTailMovable(sn *Snake) bool {
+	head := sn.Body[0]
+	for d := 0; d < 4; d++ {
+		nc := s.G.Nbm[head][d]
+		if nc >= 0 && s.isApple(nc) {
+			return false
+		}
+	}
+	return true
+}
+
+// buildObstacleMap marks other-snake body cells as obstacles, skipping movable tails.
+func (s *Sim) buildObstacleMap(excludeID int) {
+	for i := 0; i < s.obstacleMapN; i++ {
+		s.obstacleMap[s.obstacleMapPrev[i]] = false
+	}
+	s.obstacleMapN = 0
+	g := s.G
+	for i := 0; i < g.SNum; i++ {
+		other := &g.Sn[i]
+		if other.ID == excludeID || !other.Alive {
+			continue
+		}
+		tailIdx := other.Len - 1
+		movable := s.isTailMovable(other)
+		for bi, c := range other.Body {
+			if c >= 0 && c < g.NCells {
+				if bi == tailIdx && movable {
+					continue
+				}
+				s.obstacleMap[c] = true
+				s.obstacleMapPrev[s.obstacleMapN] = c
+				s.obstacleMapN++
+			}
+		}
+	}
+}
+
+const surfTailKeep = 8 // segments to keep after support point
+
+// SurfBFS finds shortest body-simulation paths from sn's current position
+// to reachable surfaces, treating other snakes as static obstacles.
+// Long snakes are shrunk: body[0..Sp+surfTailKeep] is simulated,
+// remaining segments become static walls.
+// Returns one SurfReach per reachable surface, sorted by Dist ascending.
+func (s *Sim) SurfBFS(sn *Snake) []SurfReach {
+	g := s.G
+	if sn == nil || !sn.Alive || sn.Len == 0 {
+		return nil
+	}
+	head := sn.Body[0]
+	if !g.IsInGrid(head) {
+		return nil
+	}
+
+	s.buildObstacleMap(sn.ID)
+
+	// shrink long snakes: keep head..Sp + surfTailKeep segments after Sp
+	// excess segments become obstacles
+	cutoff := sn.Len
+	if sn.Sp >= 0 {
+		cutoff = sn.Sp + 1 + surfTailKeep
+	} else {
+		cutoff = surfTailKeep
+	}
+	if cutoff > sn.Len {
+		cutoff = sn.Len
+	}
+	for i := cutoff; i < sn.Len; i++ {
+		c := sn.Body[i]
+		if c >= 0 && c < g.NCells {
+			s.obstacleMap[c] = true
+			s.obstacleMapPrev[s.obstacleMapN] = c
+			s.obstacleMapN++
+		}
+	}
+
+	startBody := append([]int(nil), sn.Body[:cutoff]...)
+	visited := make(map[uint64]bool)
+	visited[bodyHash(startBody)] = true
+
+	queue := []surfNode{{
+		body:     startBody,
+		dist:     0,
+		firstDir: -1,
+		prevDir:  sn.Dir,
+	}}
+
+	bestSurf := make(map[int]SurfReach)
+
+	for qi := 0; qi < len(queue); qi++ {
+		cur := queue[qi]
+		if cur.dist >= surfMaxDepth {
+			continue
+		}
+		curHead := cur.body[0]
+		if !g.IsInGrid(curHead) {
+			continue
+		}
+
+		for dir := 0; dir < 4; dir++ {
+			// reject backward
+			if dir == Do[cur.prevDir] {
+				continue
+			}
+			// reject UP noop when tail is only support
+			if cur.dist == 0 && dir == DU && sn.Sp == sn.Len-1 {
+				continue
+			}
+
+			newBody, alive := s.simulateMove(cur.body, dir)
+			if !alive {
+				continue
+			}
+			bodycp := append([]int(nil), newBody...)
+
+			if !s.applyGravity(bodycp) {
+				continue
+			}
+
+			// obstacle check on settled body
+			blocked := false
+			for _, c := range bodycp {
+				if c >= 0 && c < g.NCells && s.obstacleMap[c] {
+					blocked = true
+					break
+				}
+			}
+			if blocked {
+				continue
+			}
+
+			h := bodyHash(bodycp)
+			if visited[h] {
+				continue
+			}
+			visited[h] = true
+
+			fd := cur.firstDir
+			if fd == -1 {
+				fd = dir
+			}
+			newDist := cur.dist + 1
+			newDirs := append(append([]int(nil), cur.dirs...), dir)
+			newHead := bodycp[0]
+			newHeads := append(append([]int(nil), cur.heads...), newHead)
+
+			// check if head landed on a surface
+			if g.IsInGrid(newHead) {
+				sid := g.SurfAt[newHead]
+				if sid >= 0 && g.Surfs[sid].Type != SurfNone {
+					if _, ok := bestSurf[sid]; !ok {
+						bestSurf[sid] = SurfReach{
+							SurfID:   sid,
+							Dist:     newDist,
+							FirstDir: fd,
+							Landing:  newHead,
+							Dirs:     newDirs,
+							Heads:    newHeads,
+						}
+					}
+					continue // don't enqueue surface hits
+				}
+			}
+
+			queue = append(queue, surfNode{
+				body:     bodycp,
+				dist:     newDist,
+				firstDir: fd,
+				prevDir:  dir,
+				dirs:     newDirs,
+				heads:    newHeads,
+			})
+		}
+	}
+
+	results := make([]SurfReach, 0, len(bestSurf))
+	for _, sr := range bestSurf {
+		results = append(results, sr)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Dist < results[j].Dist
+	})
+	return results
 }

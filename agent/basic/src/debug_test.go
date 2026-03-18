@@ -61,10 +61,37 @@ func TestPrintMap(t *testing.T) {
 		AppleLinks []AppleLinkJSON `json:"appleLinks"`
 	}
 
+	type SurfReachJSON struct {
+		SurfID  int          `json:"surfId"`
+		Dist    int          `json:"dist"`
+		Landing debugCoord   `json:"landing"`
+		Dirs    []string     `json:"dirs"`
+		Heads   []debugCoord `json:"heads"`
+	}
+
+	type ReachAppleJSON struct {
+		Apple debugCoord `json:"apple"`
+		Dist  int        `json:"dist"`
+		Dir   string     `json:"dir"`
+	}
+
+	type PlanJSON struct {
+		OnSurface    bool             `json:"onSurface"`
+		Apples       []ReachAppleJSON `json:"apples"`
+		BestApple    *debugCoord      `json:"bestApple,omitempty"`
+		BestDist     int              `json:"bestDist"`
+		Conflicting  bool             `json:"conflicting"`
+		ConflictWith int              `json:"conflictWith"`
+		SurfReaches  []SurfReachJSON  `json:"surfReaches"`
+	}
+
 	type SnakeJSON struct {
 		ID    int          `json:"id"`
 		Owner int          `json:"owner"`
 		Body  []debugCoord `json:"body"`
+		Dir   string       `json:"dir"`
+		Sp    int          `json:"sp"`
+		Plan  *PlanJSON    `json:"plan,omitempty"`
 	}
 
 	type MapJSON struct {
@@ -95,6 +122,35 @@ func TestPrintMap(t *testing.T) {
 		apples[i] = toCoord(g.Ap[i])
 	}
 
+	dirName := func(d int) string {
+		if d >= 0 && d < 4 {
+			return Dn[d]
+		}
+		return "?"
+	}
+
+	toSurfReachJSON := func(sr SurfReach) SurfReachJSON {
+		dirs := make([]string, len(sr.Dirs))
+		for k, d := range sr.Dirs {
+			dirs[k] = dirName(d)
+		}
+		heads := make([]debugCoord, len(sr.Heads))
+		for k, h := range sr.Heads {
+			heads[k] = toCoord(h)
+		}
+		return SurfReachJSON{
+			SurfID:  sr.SurfID,
+			Dist:    sr.Dist,
+			Landing: toCoord(sr.Landing),
+			Dirs:    dirs,
+			Heads:   heads,
+		}
+	}
+
+	// Compute BFS plans
+	sim := NewSim(g)
+	sim.RebuildAppleMap()
+
 	snakes := make([]SnakeJSON, g.SNum)
 	for i := 0; i < g.SNum; i++ {
 		sn := &g.Sn[i]
@@ -102,7 +158,52 @@ func TestPrintMap(t *testing.T) {
 		for j := 0; j < sn.Len; j++ {
 			body[j] = toCoord(sn.Body[j])
 		}
-		snakes[i] = SnakeJSON{ID: sn.ID, Owner: sn.Owner, Body: body}
+
+		sj := SnakeJSON{
+			ID:    sn.ID,
+			Owner: sn.Owner,
+			Body:  body,
+			Dir:   dirName(sn.Dir),
+			Sp:    sn.Sp,
+		}
+
+		// Compute plan
+		head := sn.Body[0]
+		onSurf := g.IsInGrid(head) && g.SurfAt[head] >= 0 && sn.Sp == 0
+
+		plan := PlanJSON{
+			OnSurface:    onSurf,
+			ConflictWith: -1,
+		}
+
+		var entries []SurfReach
+		if onSurf {
+			sid := g.SurfAt[head]
+			entries = []SurfReach{{SurfID: sid, Dist: 0, FirstDir: -1, Landing: head}}
+		} else {
+			entries = sim.SurfBFS(sn)
+			plan.SurfReaches = make([]SurfReachJSON, len(entries))
+			for k, sr := range entries {
+				plan.SurfReaches[k] = toSurfReachJSON(sr)
+			}
+		}
+		reach := surfGraphReach(g, entries, sn.Len, head)
+		plan.Apples = make([]ReachAppleJSON, len(reach))
+		for k, ri := range reach {
+			plan.Apples[k] = ReachAppleJSON{
+				Apple: toCoord(ri.Apple),
+				Dist:  ri.Dist,
+				Dir:   dirName(ri.FirstDir),
+			}
+		}
+		if len(reach) > 0 {
+			c := toCoord(reach[0].Apple)
+			plan.BestApple = &c
+			plan.BestDist = reach[0].Dist
+		}
+
+		sj.Plan = &plan
+		snakes[i] = sj
 	}
 
 	surfs := make([]SurfJSON, len(g.Surfs))

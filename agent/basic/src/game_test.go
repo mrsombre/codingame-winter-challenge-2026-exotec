@@ -295,12 +295,6 @@ func TestParseBody(t *testing.T) {
 		wantIdx []int
 	}{
 		{
-			"single cell",
-			"3,2",
-			1,
-			[]int{g.Idx(3, 2)},
-		},
-		{
 			"horizontal body",
 			"0,0:1,0:2,0",
 			3,
@@ -320,12 +314,107 @@ func TestParseBody(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		body := g.ParseBody(tt.input)
-		assert.Equal(t, tt.wantLen, len(body), tt.name)
+		var sn Snake
+		g.ParseBody(&sn, tt.input)
+		assert.Equal(t, tt.wantLen, sn.Len, tt.name)
+		assert.True(t, sn.Alive, tt.name+" alive")
 		for i, want := range tt.wantIdx {
-			assert.Equal(t, want, body[i], "%s body[%d]", tt.name, i)
+			assert.Equal(t, want, sn.Body[i], "%s body[%d]", tt.name, i)
 		}
 	}
+}
+
+func TestSnakeDir(t *testing.T) {
+	g := testGridInput([]string{
+		".....",
+		".....",
+		".....",
+		".....",
+		".....",
+	})
+
+	tests := []struct {
+		name    string
+		body    string
+		wantDir int
+	}{
+		{"facing up", "1,0:1,1:1,2", DU},
+		{"facing right", "2,2:1,2:0,2", DR},
+		{"facing down", "3,3:3,2:3,1", DD},
+		{"facing left", "0,1:1,1:2,1", DL},
+	}
+	for _, tt := range tests {
+		var sn Snake
+		g.ParseBody(&sn, tt.body)
+		assert.Equal(t, tt.wantDir, sn.Dir, "%s dir", tt.name)
+		assert.True(t, sn.Alive, "%s alive", tt.name)
+		assert.Equal(t, 3, sn.Len, "%s len", tt.name)
+	}
+}
+
+// --- Sp ---
+
+func buildBodyOf(g *Game) []int {
+	bodyOf := g.bodyOf[:g.NCells]
+	for i := range bodyOf {
+		bodyOf[i] = -1
+	}
+	for i := 0; i < g.SNum; i++ {
+		for _, c := range g.Sn[i].Body {
+			if c >= 0 {
+				bodyOf[c] = i
+			}
+		}
+	}
+	return bodyOf
+}
+
+func TestSnakeSp(t *testing.T) {
+	// 5x5 grid, wall row at bottom
+	g := testGridInput([]string{
+		".....",
+		".....",
+		".....",
+		".....",
+		"#####",
+	})
+	g.bodyOf = make([]int, g.NCells)
+
+	// snake on ground: head at (2,3), body going right — head is on wall
+	g.SNum = 2
+	g.Sn[0] = Snake{ID: 0, Owner: 0, Alive: true,
+		Body: []int{g.Idx(2, 3), g.Idx(3, 3), g.Idx(4, 3)}, Len: 3}
+	// snake in air: head at (1,0), body going down — tail at (1,2)
+	g.Sn[1] = Snake{ID: 1, Owner: 1, Alive: true,
+		Body: []int{g.Idx(1, 0), g.Idx(1, 1), g.Idx(1, 2)}, Len: 3}
+	g.ANum = 0
+
+	bodyOf := buildBodyOf(g)
+
+	// snake 0: all segments on wall row below (y=4) → Sp=0 (head)
+	assert.Equal(t, 0, g.findSp(0, bodyOf), "grounded snake")
+	// snake 1: no support below any segment → Sp=-1
+	assert.Equal(t, -1, g.findSp(1, bodyOf), "airborne snake")
+
+	// now put an apple below snake 1's tail (1,3)
+	g.Ap = []int{g.Idx(1, 3)}
+	g.ANum = 1
+	assert.Equal(t, 2, g.findSp(1, bodyOf), "apple supports tail")
+
+	// put apple below head instead (1,1) — head wins (index 0 < 2)
+	g.Ap = []int{g.Idx(1, 3), g.Idx(1, 1)}
+	g.ANum = 2
+	assert.Equal(t, 0, g.findSp(1, bodyOf), "apple supports head")
+
+	// clear apples, add another snake below snake 1's mid segment
+	g.Ap = g.Ap[:0]
+	g.ANum = 0
+	g.SNum = 3
+	g.Sn[2] = Snake{ID: 2, Owner: 0, Alive: true,
+		Body: []int{g.Idx(0, 2), g.Idx(1, 2), g.Idx(2, 2)}, Len: 3}
+	bodyOf = buildBodyOf(g)
+	// snake 2 body at (1,2) is below snake 1's segment at (1,1) → Sp=1
+	assert.Equal(t, 1, g.findSp(1, bodyOf), "other snake supports mid")
 }
 
 // --- XY ---
@@ -395,6 +484,51 @@ func TestIsMy(t *testing.T) {
 	}
 	for _, tt := range tests {
 		assert.Equal(t, tt.want, g.IsMy(tt.id), "IsMy(%d)", tt.id)
+	}
+}
+
+// --- DirFromTo ---
+
+func TestDirFromTo(t *testing.T) {
+	g := testGridInput([]string{
+		".....",
+		".....",
+		".....",
+		".....",
+		".....",
+	})
+
+	tests := []struct {
+		name           string
+		x1, y1, x2, y2 int
+		want           int
+	}{
+		// same cell
+		{"same cell", 2, 2, 2, 2, -1},
+		// adjacent
+		{"adj up", 2, 2, 2, 1, DU},
+		{"adj right", 2, 2, 3, 2, DR},
+		{"adj down", 2, 2, 2, 3, DD},
+		{"adj left", 2, 2, 1, 2, DL},
+		// distant, one axis dominant
+		{"far up", 1, 4, 1, 0, DU},
+		{"far right", 0, 2, 4, 2, DR},
+		{"far down", 3, 0, 3, 4, DD},
+		{"far left", 4, 1, 0, 1, DL},
+		// diagonal, dy > dx → vertical wins
+		{"diag dy>dx up", 2, 3, 1, 0, DU},
+		{"diag dy>dx down", 1, 0, 2, 3, DD},
+		// diagonal, dx > dy → horizontal wins
+		{"diag dx>dy right", 0, 1, 3, 2, DR},
+		{"diag dx>dy left", 3, 2, 0, 1, DL},
+		// tie → vertical wins
+		{"tie up-right", 2, 2, 3, 1, DU},
+		{"tie down-left", 2, 2, 1, 3, DD},
+	}
+	for _, tt := range tests {
+		a := g.Idx(tt.x1, tt.y1)
+		b := g.Idx(tt.x2, tt.y2)
+		assert.Equal(t, tt.want, g.DirFromTo(a, b), tt.name)
 	}
 }
 

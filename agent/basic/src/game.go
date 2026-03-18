@@ -27,6 +27,8 @@ var Dl = [4][2]int{
 	{-1, 0}, // DL
 }
 
+var Do = [4]int{DD, DL, DU, DR} // opposite direction
+
 var Dn = [4]string{"UP", "RIGHT", "DOWN", "LEFT"}
 
 const (
@@ -43,6 +45,8 @@ type Snake struct {
 	Owner int // 0 = mine, 1 = enemy
 	Body  []int
 	Len   int
+	Dir   int // head facing direction (DU/DR/DD/DL), derived from Body[0]→Body[1]
+	Sp    int // body index of nearest supported segment from head; -1 if none
 	Alive bool
 }
 
@@ -108,6 +112,9 @@ type Game struct {
 	ANum int
 
 	Oob int
+
+	// scratch buffer for Sp computation (allocated once)
+	bodyOf []int
 }
 
 // Init reads w, h, row strings from scanner, builds walls and neighbors in one pass.
@@ -183,21 +190,28 @@ func Init(s *bufio.Scanner) *Game {
 
 	// pre-allocate turn data
 	g.Ap = make([]int, 0, MaxAp)
+	g.bodyOf = make([]int, g.NCells)
 
 	return g
 }
 
-// ParseBody parses "x,y:x,y:x,y" into flat cell indices.
-// OOB segments get -1.
-func (g *Game) ParseBody(s string) []int {
-	dst := make([]int, 0, 8)
-	for _, seg := range strings.Split(s, ":") {
-		comma := strings.IndexByte(seg, ',')
-		x, _ := strconv.Atoi(seg[:comma])
-		y, _ := strconv.Atoi(seg[comma+1:])
-		dst = append(dst, g.Idx(x, y))
+// ParseBody parses "x,y:x,y:x,y" into sn, setting Body, Len, Dir, Alive.
+func (g *Game) ParseBody(sn *Snake, line string) {
+	seg := strings.Split(line, ":")
+	if cap(sn.Body) >= len(seg) {
+		sn.Body = sn.Body[:0]
+	} else {
+		sn.Body = make([]int, 0, len(seg))
 	}
-	return dst
+	for _, s := range seg {
+		comma := strings.IndexByte(s, ',')
+		x, _ := strconv.Atoi(s[:comma])
+		y, _ := strconv.Atoi(s[comma+1:])
+		sn.Body = append(sn.Body, g.Idx(x, y))
+	}
+	sn.Len = len(sn.Body)
+	sn.Alive = true
+	sn.Dir = g.DirFromTo(sn.Body[1], sn.Body[0])
 }
 
 // Turn reads per-turn data from scanner: apples and snakes.
@@ -215,9 +229,9 @@ func (g *Game) Turn(s *bufio.Scanner) {
 		g.Ap = append(g.Ap, g.Idx(x, y))
 	}
 
-	// snakes
+	// snakes — preserve Body backing array for reuse
 	for i := 0; i < g.SNum; i++ {
-		g.Sn[i] = Snake{}
+		g.Sn[i] = Snake{Body: g.Sn[i].Body[:0]}
 	}
 	s.Scan()
 	fmt.Sscan(s.Text(), &g.SNum)
@@ -230,15 +244,57 @@ func (g *Game) Turn(s *bufio.Scanner) {
 		log(id, body)
 		sn := &g.Sn[i]
 		sn.ID = id
-		sn.Alive = true
 		if g.IsMy(id) {
 			sn.Owner = 0
 		} else {
 			sn.Owner = 1
 		}
-		sn.Body = g.ParseBody(body)
-		sn.Len = len(sn.Body)
+		g.ParseBody(sn, body)
 	}
+
+	// compute Sp (support point) for each snake
+	// build body occupancy: cell -> snake index (-1 = unoccupied)
+	bodyOf := g.bodyOf[:g.NCells]
+	for i := range bodyOf {
+		bodyOf[i] = -1
+	}
+	for i := 0; i < g.SNum; i++ {
+		for _, c := range g.Sn[i].Body {
+			if c >= 0 {
+				bodyOf[c] = i
+			}
+		}
+	}
+	for i := 0; i < g.SNum; i++ {
+		g.Sn[i].Sp = g.findSp(i, bodyOf)
+	}
+}
+
+// findSp returns body index of the nearest segment from head that is supported.
+// Supported = cell below (DD neighbor) is wall, apple, or another snake's body.
+func (g *Game) findSp(si int, bodyOf []int) int {
+	sn := &g.Sn[si]
+	for i, c := range sn.Body {
+		below := c + g.Stride
+		if below < 0 || below >= g.NCells {
+			continue
+		}
+		// wall
+		if !g.Cell[below] {
+			return i
+		}
+		// other snake
+		if bodyOf[below] >= 0 && bodyOf[below] != si {
+			return i
+		}
+		// apple
+		for j := 0; j < g.ANum; j++ {
+			if g.Ap[j] == below {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // Idx converts game coordinates to expanded flat index.
@@ -266,6 +322,49 @@ func (g *Game) IsMy(id int) bool {
 		}
 	}
 	return false
+}
+
+// DirFromTo returns the dominant direction from cell a to cell b.
+// For adjacent cells this is exact (no division). For distant cells it picks
+// the axis with greater delta; ties break to vertical (DU/DD).
+// Returns -1 when a == b.
+func (g *Game) DirFromTo(a, b int) int {
+	delta := b - a
+	if delta == 0 {
+		return -1
+	}
+	// fast path: adjacent cells
+	switch delta {
+	case -g.Stride:
+		return DU
+	case 1:
+		return DR
+	case g.Stride:
+		return DD
+	case -1:
+		return DL
+	}
+	// distant cells: dominant axis
+	ax, ay := g.XY(a)
+	bx, by := g.XY(b)
+	dx, dy := bx-ax, by-ay
+	adx, ady := dx, dy
+	if adx < 0 {
+		adx = -adx
+	}
+	if ady < 0 {
+		ady = -ady
+	}
+	if ady >= adx {
+		if dy < 0 {
+			return DU
+		}
+		return DD
+	}
+	if dx > 0 {
+		return DR
+	}
+	return DL
 }
 
 // Manhattan returns the Manhattan distance between two cells.
