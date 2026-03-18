@@ -7,11 +7,14 @@ const (
 	greedyMobilityScore  = 12
 	greedyNoopPenalty    = 150
 
-	// Contestation bonuses applied in greedyHeuristic.
-	// Contestation bonuses: kept small to only affect tie-breaking (dist*20 gap = 20 per hop).
-	heuristicContestMineBonus = 15 // prefer exclusive apples at same distance
-	heuristicContestSharedPen = 0  // no penalty for contested
-	heuristicContestTheirsPen = -5 // slight depriority for exclusive-theirs
+	// Contestation bonuses: scaled to match 3-turn margin (3 hops × 20 pts/hop = 60).
+	heuristicContestMineBonus = 60  // prefer exclusive apples (worth ~3 hop advantage)
+	heuristicContestSharedPen = 0   // no penalty for contested
+	heuristicContestTheirsPen = -60 // deprioritize enemy-dominated apples
+
+	// BFS agreement: bonus when DFS direction matches BFS-computed direction.
+	// Smaller than greedyEatScore so immediate food still wins.
+	greedyBFSAgreementBonus = 200
 )
 
 type greedyEval struct {
@@ -25,15 +28,19 @@ func (d *Decision) phaseScoring() {
 
 	for si, snIdx := range d.MySnakes {
 		sn := &g.Sn[snIdx]
-		startSurfs := occupiedSurfaces(g, sn.Body)
-		bestDir := d.AssignedDir[si]
+		bfsDir := d.AssignedDir[si] // BFS-computed direction (body-sim validated)
+		bestDir := bfsDir
 		bestScore := -1 << 30
 		bestApple := d.Assigned[si]
 
 		for dir := 0; dir < 4; dir++ {
-			eval, ok := d.greedyEvaluateMove(sim, sn, startSurfs, dir, greedyDFSDepth)
+			eval, ok := d.greedyEvaluateMove(sim, sn, dir, greedyDFSDepth)
 			if !ok {
 				continue
+			}
+			// Bonus when DFS agrees with BFS direction
+			if dir == bfsDir {
+				eval.score += greedyBFSAgreementBonus
 			}
 			if eval.score > bestScore {
 				bestScore = eval.score
@@ -47,13 +54,13 @@ func (d *Decision) phaseScoring() {
 	}
 }
 
-func (d *Decision) greedyEvaluateMove(sim *Sim, sn *Snake, startSurfs map[int]bool, dir, depth int) (greedyEval, bool) {
+func (d *Decision) greedyEvaluateMove(sim *Sim, sn *Snake, dir, depth int) (greedyEval, bool) {
 	body, apples, ateApple, ok := simulateSingleMove(sim, sn.Body, dir, d.G.Ap[:d.G.ANum])
 	if !ok {
 		return greedyEval{}, false
 	}
 
-	eval := d.greedyDFS(sim, body, apples, startSurfs, depth-1)
+	eval := d.greedyDFS(sim, body, apples, depth-1)
 	if sameBody(sn.Body, body) {
 		eval.score -= greedyNoopPenalty
 	}
@@ -64,9 +71,9 @@ func (d *Decision) greedyEvaluateMove(sim *Sim, sn *Snake, startSurfs map[int]bo
 	return eval, true
 }
 
-func (d *Decision) greedyDFS(sim *Sim, body []int, apples []int, startSurfs map[int]bool, depth int) greedyEval {
+func (d *Decision) greedyDFS(sim *Sim, body []int, apples []int, depth int) greedyEval {
 	best := d.greedyHeuristic(body, apples)
-	if depth <= 0 || !touchesAnySurface(d.G, body, startSurfs) {
+	if depth <= 0 || !isOnAnySurface(d.G, body) {
 		return best
 	}
 
@@ -84,7 +91,7 @@ func (d *Decision) greedyDFS(sim *Sim, body []int, apples []int, startSurfs map[
 			continue
 		}
 
-		child := d.greedyDFS(sim, nextBody, nextApples, startSurfs, depth-1)
+		child := d.greedyDFS(sim, nextBody, nextApples, depth-1)
 		score := child.score
 		apple := child.apple
 		if sameBody(body, nextBody) {
@@ -146,6 +153,20 @@ func (d *Decision) greedyHeuristic(body []int, apples []int) greedyEval {
 	}
 
 	return greedyEval{score: score, apple: apple}
+}
+
+// isOnAnySurface returns true if any body cell is on a valid surface.
+func isOnAnySurface(g *Game, body []int) bool {
+	for _, cell := range body {
+		if !g.IsInGrid(cell) {
+			continue
+		}
+		sid := g.SurfAt[cell]
+		if sid >= 0 && g.Surfs[sid].Type != SurfNone {
+			return true
+		}
+	}
+	return false
 }
 
 func occupiedSurfaces(g *Game, body []int) map[int]bool {

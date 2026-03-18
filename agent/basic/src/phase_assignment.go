@@ -41,6 +41,10 @@ func (d *Decision) phaseAssignment() {
 			for _, ri := range d.BFS.MyReach[loser] {
 				if !taken[ri.Apple] {
 					d.Assigned[loser] = ri.Apple
+					// Sync direction to match new target
+					if ri.FirstDir >= 0 {
+						d.AssignedDir[loser] = ri.FirstDir
+					}
 					break
 				}
 			}

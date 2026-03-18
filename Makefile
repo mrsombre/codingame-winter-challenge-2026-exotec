@@ -2,7 +2,7 @@ LOGIC ?= basic
 BIN_DIR ?= bin
 
 ENGINE_ARGS ?= --simulations 30 --parallel 5 --seed 50
-GAME_ARGS ?= --max-turns 100
+GAME_ARGS ?= --max-turns 100 --league-level 3
 
 P0 ?= $(LOGIC)
 P1 ?= opponent
@@ -10,7 +10,7 @@ P1 ?= opponent
 export GOCACHE := $(CURDIR)/tmp/go-build
 export GOMAXPROCS := 1
 
-.PHONY: test build-agent build-opponent match match-bin bundle-% clean debug-data debug-dev
+.PHONY: test build-agent build-opponent match match-bin bundle-% clean replay debug
 
 test:
 	go test ./agent/$(LOGIC)/src
@@ -38,10 +38,10 @@ match-bin:
 		--p1-bin $(BIN_DIR)/$(P1) \
 		$(ENGINE_ARGS) $(GAME_ARGS)
 
-debug-data:
+replay:
 	go test -tags debug ./agent/$(LOGIC)/src -run "^TestPrint" -v
 
-debug-dev: debug-data
+debug: replay
 	cd debug && pnpm dev
 
 clean:

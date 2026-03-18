@@ -64,13 +64,11 @@ func (d *Decision) command() {
 		return
 	}
 
-	parts := make([]string, len(cmds))
+	var parts []string
 	for i, c := range cmds {
-		parts[i] = c.String()
-	}
-
-	if debug {
-		for si := range d.MySnakes {
+		parts = append(parts, c.String())
+		if debug && i < len(d.MySnakes) {
+			si := i
 			if d.Assigned[si] >= 0 && g.IsInGrid(d.Assigned[si]) {
 				x, y := g.XY(d.Assigned[si])
 				parts = append(parts, fmt.Sprintf("MARK %d %d", x, y))

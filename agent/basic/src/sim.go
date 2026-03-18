@@ -511,6 +511,9 @@ type surfNode struct {
 // (i.e. it won't eat an apple this turn).
 func (s *Sim) isTailMovable(sn *Snake) bool {
 	head := sn.Body[0]
+	if head < 0 || head >= s.G.NCells {
+		return true
+	}
 	for d := 0; d < 4; d++ {
 		nc := s.G.Nbm[head][d]
 		if nc >= 0 && s.isApple(nc) {

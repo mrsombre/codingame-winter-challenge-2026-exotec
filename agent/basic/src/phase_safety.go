@@ -39,7 +39,7 @@ func (d *Decision) ensureSafety() {
 // floodCount counts reachable free cells from start via BFS.
 // Blocked by walls and sc.blocked[]. Self-cleans visited.
 func floodCount(g *Game, sc *SafetyScratch, start int) int {
-	if start < 0 || start >= g.NCells || !g.IsInGrid(start) || !g.Cell[start] || sc.blocked[start] {
+	if start < 0 || start >= g.NCells || !g.Cell[start] || sc.blocked[start] {
 		return 0
 	}
 
@@ -123,10 +123,13 @@ func (d *Decision) phaseSafetyLayer1(sim *Sim) {
 		if sn.Len == 0 || len(sn.Body) == 0 {
 			continue
 		}
+		head := sn.Body[0]
+		if head < 0 || head >= g.NCells {
+			continue
+		}
 
 		d.buildBlockedForSnake(sim, sc, snIdx)
 
-		head := sn.Body[0]
 		neck := neckOf(sn.Body)
 		bodyLen := sn.Len
 
@@ -153,6 +156,10 @@ func (d *Decision) phaseSafetyLayer1(sim *Sim) {
 			if !alive {
 				continue
 			}
+
+			// Detect beheading: simulateMove returns shorter body on wall/self collision
+			beheaded := len(newBody) < sn.Len
+
 			bodycp := sc.bodyBuf[:len(newBody)]
 			copy(bodycp, newBody)
 
@@ -174,6 +181,11 @@ func (d *Decision) phaseSafetyLayer1(sim *Sim) {
 			}
 
 			flood := floodCount(g, sc, newHead)
+
+			// Beheading moves lose a segment — never prefer them as "best flood"
+			if beheaded {
+				flood = 0
+			}
 			sc.floodByDir[dir] = flood
 
 			// Unblock own body
@@ -226,6 +238,9 @@ func (d *Decision) phaseSafetyLayer2() {
 		}
 
 		head := sn.Body[0]
+		if head < 0 || head >= g.NCells {
+			continue
+		}
 		assignedDir := d.AssignedDir[si]
 
 		// Our planned next head
@@ -242,6 +257,9 @@ func (d *Decision) phaseSafetyLayer2() {
 				continue
 			}
 			opHead := op.Body[0]
+			if opHead < 0 || opHead >= g.NCells || !g.IsInGrid(opHead) {
+				continue
+			}
 			opNeck := neckOf(op.Body)
 
 			// Check head-on: enemy's possible next heads
@@ -307,6 +325,9 @@ func (d *Decision) phaseSafetyLayer2() {
 					continue
 				}
 				opHead := op.Body[0]
+				if opHead < 0 || opHead >= g.NCells || !g.IsInGrid(opHead) {
+					continue
+				}
 				opNeck := neckOf(op.Body)
 				for od := 0; od < 4; od++ {
 					opNext := g.Nbm[opHead][od]

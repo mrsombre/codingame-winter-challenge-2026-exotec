@@ -69,6 +69,33 @@ func testGameFull(opts ...int64) *Game {
 	return g
 }
 
+// testTurnInput feeds turn data lines into an already-initialized Game.
+// Lines format: apple count, then apple coords, then snake count, then snake bodies.
+// Same format as g.Turn() expects from stdin.
+func testTurnInput(g *Game, lines []string) {
+	s := bufio.NewScanner(strings.NewReader(strings.Join(lines, "\n")))
+	g.Turn(s)
+}
+
+// testGameWithTurn creates a Game from seed + custom turn data, then builds Plan with apples.
+func testGameWithTurn(turnLines []string, opts ...int64) (*Game, *Plan) {
+	seed, league := gameOpts(opts...)
+	eg := engine.NewGame(seed, league)
+	p0 := engine.NewPlayer(0)
+	p1 := engine.NewPlayer(1)
+	eg.Init([]*engine.Player{p0, p1})
+
+	lines := engine.SerializeGlobalInfoFor(p0, eg)
+	s := bufio.NewScanner(strings.NewReader(strings.Join(lines, "\n")))
+	g := Init(s)
+
+	testTurnInput(g, turnLines)
+
+	p := &Plan{G: g}
+	p.Init()
+	return g, p
+}
+
 func testGridInput(lines []string) *Game {
 	w := len(lines[0])
 	h := len(lines)

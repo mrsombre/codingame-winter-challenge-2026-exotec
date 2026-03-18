@@ -9,9 +9,6 @@ import (
 	"testing"
 )
 
-const debugSeed int64 = 2633570716462326000
-const debugLeague = 3
-
 var debugOutDir = filepath.Join("..", "..", "..", "debug", "public")
 
 type debugCoord struct {
@@ -32,9 +29,22 @@ func debugWriteJSON(t *testing.T, name string, v any) {
 	t.Logf("wrote %d bytes to %s", len(out), outPath)
 }
 
-func TestPrintMap(t *testing.T) {
-	g := testGameFull(debugSeed, int64(debugLeague))
+// dbgGameDebug builds Game from debug config vars in decision_test.go.
+// Uses replay folder or dbgSeed + dbgTurnLines. Builds surface graph.
+// Returns game and the actual seed used.
+func dbgGameDebug() (*Game, int64) {
+	// Resolve seed (replay folder takes priority)
+	seed := dbgSeed
+	if s, ok := loadReplaySeed(); ok {
+		seed = s
+	}
+	g := dbgGame()
 	g.BuildSurfaceGraph()
+	return g, seed
+}
+
+func TestPrintMap(t *testing.T) {
+	g, seed := dbgGameDebug()
 
 	type LinkJSON struct {
 		To      int          `json:"to"`
@@ -95,12 +105,14 @@ func TestPrintMap(t *testing.T) {
 	}
 
 	type MapJSON struct {
-		W        int         `json:"w"`
-		H        int         `json:"h"`
+		Seed     int64        `json:"seed"`
+		League   int          `json:"league"`
+		W        int          `json:"w"`
+		H        int          `json:"h"`
 		Walls    []debugCoord `json:"walls"`
 		Apples   []debugCoord `json:"apples"`
-		Snakes   []SnakeJSON `json:"snakes"`
-		Surfaces []SurfJSON  `json:"surfaces"`
+		Snakes   []SnakeJSON  `json:"snakes"`
+		Surfaces []SurfJSON   `json:"surfaces"`
 	}
 
 	toCoord := func(cell int) debugCoord {
@@ -241,18 +253,20 @@ func TestPrintMap(t *testing.T) {
 			stype = "none"
 		}
 		surfs[i] = SurfJSON{
-			ID:    s.ID,
-			Y:     s.Y,
-			Left:  s.Left,
-			Right: s.Right,
-			Len:   s.Len,
-			Type:  stype,
-			Links: links,
+			ID:         s.ID,
+			Y:          s.Y,
+			Left:       s.Left,
+			Right:      s.Right,
+			Len:        s.Len,
+			Type:       stype,
+			Links:      links,
 			AppleLinks: appleLinks,
 		}
 	}
 
 	debugWriteJSON(t, "map.json", MapJSON{
+		Seed:     seed,
+		League:   testLeague,
 		W:        g.W,
 		H:        g.H,
 		Walls:    walls,
@@ -263,12 +277,12 @@ func TestPrintMap(t *testing.T) {
 }
 
 func TestPrintSurfaces(t *testing.T) {
-	g := testGameFull(debugSeed, int64(debugLeague))
+	g, _ := dbgGameDebug()
 
 	type CellJSON struct {
 		X    int `json:"x"`
 		Y    int `json:"y"`
-		Surf int `json:"surf"` // surface ID or -1
+		Surf int `json:"surf"`
 	}
 
 	type SurfJSON struct {
@@ -280,15 +294,15 @@ func TestPrintSurfaces(t *testing.T) {
 	}
 
 	type LinkJSON struct {
-		From int          `json:"from"` // source surface ID
-		To   int          `json:"to"`   // target surface ID
+		From int          `json:"from"`
+		To   int          `json:"to"`
 		Path []debugCoord `json:"path"`
 	}
 
 	type AppleLinkJSON struct {
-		From  int          `json:"from"`  // source surface ID
-		Apple debugCoord   `json:"apple"` // target apple coord
-		Start debugCoord   `json:"start"` // source surface coord
+		From  int          `json:"from"`
+		Apple debugCoord   `json:"apple"`
+		Start debugCoord   `json:"start"`
 		Path  []debugCoord `json:"path"`
 	}
 
@@ -296,10 +310,10 @@ func TestPrintSurfaces(t *testing.T) {
 		W          int             `json:"w"`
 		H          int             `json:"h"`
 		Walls      []debugCoord    `json:"walls"`
-		Cells      []CellJSON      `json:"cells"`      // all surface cells with their surface ID
+		Cells      []CellJSON      `json:"cells"`
 		Surfaces   []SurfJSON      `json:"surfaces"`
-		Links      []LinkJSON      `json:"links"`      // all links flattened
-		AppleLinks []AppleLinkJSON `json:"appleLinks"` // all apple links flattened
+		Links      []LinkJSON      `json:"links"`
+		AppleLinks []AppleLinkJSON `json:"appleLinks"`
 	}
 
 	var walls []debugCoord
