@@ -28,7 +28,7 @@ func main() {
 
 	for {
 		g.Turn(s)
-		p.UpdateAppleSurfaces()
+		p.Turn()
 		bot.Decide()
 	}
 }

@@ -23,12 +23,11 @@ type SnakePlan struct {
 }
 
 // BFSResult holds reach data computed by phaseBFS.
+// Arrays indexed by snake slot (0..SNum-1), not by MySnakes/OpSnakes slot.
 type BFSResult struct {
-	MyReach   [MaxPSn][]ReachInfo // per friendly snake, sorted by Dist ascending
-	OpReach   [MaxPSn][]ReachInfo // per enemy snake, sorted by Dist ascending
-	MySurfBFS [MaxPSn][]SurfReach // body-sim paths to surfaces (friendly)
-	OpSurfBFS [MaxPSn][]SurfReach // body-sim paths to surfaces (enemy)
-	MyPlan    [MaxPSn]SnakePlan   // combined layered plans (friendly)
+	Reach   [MaxASn][]ReachInfo // per snake, all reachable apples sorted by Dist
+	SurfBFS [MaxASn][]SurfReach // body-sim paths to surfaces
+	Plan    [MaxASn]SnakePlan   // combined layered plans
 }
 
 // surfaceReach computes reachable apples for a snake via the surface link graph.
@@ -341,15 +340,20 @@ func headsOverlap(a, b []int) bool {
 	return false
 }
 
-const maxReachDist = 8 // cap combined dist (body-sim + surface-graph)
+const maxSurfReachDist = 999 // no cap — find all apples reachable via surface graph
 
 // surfGraphReach performs pass 2: Dijkstra over surface links from multiple
 // entry points (SurfBFS results). Finds closest apples with time-aware
 // invalidation — eating an apple at time T removes its SurfApple surface
 // for subsequent traversals. headCell is used to derive firstDir for
 // on-surface starts (entry.Dist==0, entry.FirstDir==-1).
-// Total distance (entry.Dist + graph hops) is capped at maxReachDist.
-func surfGraphReach(g *Game, entries []SurfReach, snLen int, headCell int) []ReachInfo {
+// Total distance (entry.Dist + graph hops) is capped at maxSurfReachDist.
+func surfGraphReach(g *Game, entries []SurfReach, snLen int, headCell int, snakeDir ...int) []ReachInfo {
+	// Optional snake facing direction to prevent backward firstDir
+	backwardDir := -1
+	if len(snakeDir) > 0 && snakeDir[0] >= 0 {
+		backwardDir = Do[snakeDir[0]]
+	}
 	type dijkNode struct {
 		surf     int
 		dist     int
@@ -396,26 +400,31 @@ func surfGraphReach(g *Game, entries []SurfReach, snLen int, headCell int) []Rea
 
 	// dirForTarget derives first-move direction from head to a target cell.
 	// Used when entry.FirstDir == -1 (on-surface start).
-	hx := -1
-	if headCell >= 0 {
-		hx, _ = g.XY(headCell)
-	}
 	dirForTarget := func(entry SurfReach, targetCell int) int {
 		if entry.FirstDir >= 0 {
 			return entry.FirstDir
 		}
-		if hx < 0 {
-			return DL // fallback
+		// Pick neighbor cell closest to target (excluding backward)
+		bestDir := -1
+		bestDist := 1 << 30
+		for d := 0; d < 4; d++ {
+			if d == backwardDir {
+				continue
+			}
+			nb := g.Nbm[headCell][d]
+			if nb < 0 {
+				continue
+			}
+			dist := g.Manhattan(nb, targetCell)
+			if dist < bestDist {
+				bestDist = dist
+				bestDir = d
+			}
 		}
-		tx, _ := g.XY(targetCell)
-		if tx < hx {
-			return DL
+		if bestDir >= 0 {
+			return bestDir
 		}
-		if tx > hx {
-			return DR
-		}
-		// same x: infer from path direction
-		return g.DirFromTo(headCell, targetCell)
+		return DU // fallback
 	}
 
 	// Seed from all entry points
@@ -446,7 +455,7 @@ func surfGraphReach(g *Game, entries []SurfReach, snLen int, headCell int) []Rea
 				walkCost = -walkCost
 			}
 			totalDist := entry.Dist + walkCost + al.Len
-			if totalDist > maxReachDist {
+			if totalDist > maxSurfReachDist {
 				continue
 			}
 			if !appleAlive[al.Apple] {
@@ -482,7 +491,7 @@ func surfGraphReach(g *Game, entries []SurfReach, snLen int, headCell int) []Rea
 				edgeCost = costToRight
 			}
 			newDist := entry.Dist + edgeCost + link.Len
-			if newDist > maxReachDist {
+			if newDist > maxSurfReachDist {
 				continue
 			}
 			if prev, ok := bestDist[link.To]; ok && newDist >= prev {
@@ -506,7 +515,7 @@ func surfGraphReach(g *Game, entries []SurfReach, snLen int, headCell int) []Rea
 		cur := pq[0]
 		pq = pq[1:]
 
-		if cur.dist > maxReachDist {
+		if cur.dist > maxSurfReachDist {
 			break
 		}
 		if prev, ok := bestDist[cur.surf]; ok && cur.dist > prev {
@@ -526,7 +535,7 @@ func surfGraphReach(g *Game, entries []SurfReach, snLen int, headCell int) []Rea
 				walkCost = -walkCost
 			}
 			appleDist := cur.dist + walkCost + al.Len
-			if appleDist > maxReachDist {
+			if appleDist > maxSurfReachDist {
 				continue
 			}
 			if !appleAlive[al.Apple] {
@@ -564,7 +573,7 @@ func surfGraphReach(g *Game, entries []SurfReach, snLen int, headCell int) []Rea
 				edgeCost = curToRight
 			}
 			newDist := cur.dist + edgeCost + link.Len
-			if newDist > maxReachDist {
+			if newDist > maxSurfReachDist {
 				continue
 			}
 			if prev, ok := bestDist[link.To]; ok && newDist >= prev {
@@ -593,6 +602,58 @@ func surfGraphReach(g *Game, entries []SurfReach, snLen int, headCell int) []Rea
 	return result
 }
 
+// mergeSimApples runs body-simulation BFS for nearby apples and merges
+// results into reach list. SimBFS distances replace surface graph estimates
+// where shorter; new apples are added.
+func mergeSimApples(g *Game, sim *Sim, sn *Snake, reach []ReachInfo) []ReachInfo {
+	head := sn.Body[0]
+
+	// Quick check: any apples within Manhattan simAppleMaxDepth?
+	hasNearby := false
+	for i := 0; i < g.ANum; i++ {
+		if g.Manhattan(head, g.Ap[i]) <= simAppleMaxDepth {
+			hasNearby = true
+			break
+		}
+	}
+	if !hasNearby {
+		return reach
+	}
+
+	targets := sim.SimBFSApples(sn)
+	if len(targets) == 0 {
+		return reach
+	}
+
+	// Build lookup of existing reach by apple cell
+	byApple := make(map[int]int, len(reach))
+	for i, ri := range reach {
+		byApple[ri.Apple] = i
+	}
+
+	for _, t := range targets {
+		if idx, ok := byApple[t.Apple]; ok {
+			if t.Dist < reach[idx].Dist {
+				reach[idx].Dist = t.Dist
+				reach[idx].FirstDir = t.FirstDir
+			}
+		} else {
+			reach = append(reach, ReachInfo{
+				Apple:    t.Apple,
+				Dist:     t.Dist,
+				FirstDir: t.FirstDir,
+				EndSurf:  g.SurfAt[t.Apple],
+			})
+			byApple[t.Apple] = len(reach) - 1
+		}
+	}
+
+	sort.Slice(reach, func(i, j int) bool {
+		return reach[i].Dist < reach[j].Dist
+	})
+	return reach
+}
+
 func (d *Decision) phaseBFS() {
 	g := d.G
 
@@ -610,12 +671,10 @@ func (d *Decision) phaseBFS() {
 		}
 	}
 
-	for i := range d.BFS.MyReach {
-		d.BFS.MyReach[i] = nil
-		d.BFS.OpReach[i] = nil
-		d.BFS.MySurfBFS[i] = nil
-		d.BFS.OpSurfBFS[i] = nil
-		d.BFS.MyPlan[i] = SnakePlan{BestApple: -1, ConflictWith: -1}
+	for i := range d.BFS.Reach {
+		d.BFS.Reach[i] = nil
+		d.BFS.SurfBFS[i] = nil
+		d.BFS.Plan[i] = SnakePlan{BestApple: -1, ConflictWith: -1}
 	}
 
 	if cap(d.Assigned) < len(d.MySnakes) {
@@ -629,9 +688,14 @@ func (d *Decision) phaseBFS() {
 	sim := NewSim(g)
 	sim.RebuildAppleMap()
 
-	for i, snIdx := range d.MySnakes {
-		sn := &g.Sn[snIdx]
-		plan := &d.BFS.MyPlan[i]
+	// Compute reach for ALL snakes (my + enemy)
+	for i := 0; i < g.SNum; i++ {
+		sn := &g.Sn[i]
+		if !sn.Alive || sn.Len == 0 {
+			continue
+		}
+
+		plan := &d.BFS.Plan[i]
 		plan.BestApple = -1
 		plan.ConflictWith = -1
 
@@ -639,24 +703,21 @@ func (d *Decision) phaseBFS() {
 		onSurface := g.IsInGrid(head) && g.SurfAt[head] >= 0 && sn.Sp == 0
 
 		if onSurface {
-			// Already on surface: seed pass 2 from current surface directly
 			sid := g.SurfAt[head]
-			d.BFS.MySurfBFS[i] = []SurfReach{{
+			d.BFS.SurfBFS[i] = []SurfReach{{
 				SurfID: sid, Dist: 0, FirstDir: -1, Landing: head,
 			}}
-			plan.Apples = surfGraphReach(g, d.BFS.MySurfBFS[i], sn.Len, sn.Body[0])
+			plan.Apples = surfGraphReach(g, d.BFS.SurfBFS[i], sn.Len, sn.Body[0], sn.Dir)
 			if len(plan.Apples) > 0 {
 				plan.TotalFirst = plan.Apples[0].FirstDir
 				plan.BestApple = plan.Apples[0].Apple
 				plan.BestDist = plan.Apples[0].Dist
 			}
 		} else {
-			// Pass 1: body-sim to reachable surfaces
-			d.BFS.MySurfBFS[i] = sim.SurfBFS(sn)
-			// Pass 2: surface graph from ALL entry points
-			plan.Apples = surfGraphReach(g, d.BFS.MySurfBFS[i], sn.Len, sn.Body[0])
-			if len(d.BFS.MySurfBFS[i]) > 0 {
-				plan.TotalFirst = d.BFS.MySurfBFS[i][0].FirstDir
+			d.BFS.SurfBFS[i] = sim.SurfBFS(sn)
+			plan.Apples = surfGraphReach(g, d.BFS.SurfBFS[i], sn.Len, sn.Body[0], sn.Dir)
+			if len(d.BFS.SurfBFS[i]) > 0 {
+				plan.TotalFirst = d.BFS.SurfBFS[i][0].FirstDir
 			}
 			if len(plan.Apples) > 0 {
 				plan.BestApple = plan.Apples[0].Apple
@@ -664,39 +725,38 @@ func (d *Decision) phaseBFS() {
 			}
 		}
 
-		d.BFS.MyReach[i] = plan.Apples
-
-		// Assign
-		d.Assigned[i] = plan.BestApple
-		if plan.TotalFirst >= 0 {
-			d.AssignedDir[i] = plan.TotalFirst
-		} else {
-			d.AssignedDir[i] = fallbackDir(g, sn)
+		plan.Apples = mergeSimApples(g, sim, sn, plan.Apples)
+		if len(plan.Apples) > 0 {
+			plan.BestApple = plan.Apples[0].Apple
+			plan.BestDist = plan.Apples[0].Dist
+			plan.TotalFirst = plan.Apples[0].FirstDir
 		}
+
+		d.BFS.Reach[i] = plan.Apples
 	}
 
-	// Enemy reach
-	for i, snIdx := range d.OpSnakes {
-		sn := &g.Sn[snIdx]
-		d.BFS.OpSurfBFS[i] = sim.SurfBFS(sn)
-		d.BFS.OpReach[i] = surfGraphReach(g, d.BFS.OpSurfBFS[i], sn.Len, sn.Body[0])
+	// Init assignment slots for my snakes
+	for i, snIdx := range d.MySnakes {
+		d.Assigned[i] = -1
+		d.AssignedDir[i] = fallbackDir(g, &g.Sn[snIdx])
 	}
 
-	// Conflict detection: check head traces between my snakes
+	// Conflict detection between my snakes
 	for i := 0; i < len(d.MySnakes); i++ {
-		if len(d.BFS.MySurfBFS[i]) == 0 {
+		si := d.MySnakes[i]
+		if len(d.BFS.SurfBFS[si]) == 0 {
 			continue
 		}
 		for j := i + 1; j < len(d.MySnakes); j++ {
-			if len(d.BFS.MySurfBFS[j]) == 0 {
+			sj := d.MySnakes[j]
+			if len(d.BFS.SurfBFS[sj]) == 0 {
 				continue
 			}
-			// compare head traces of best (first) entry
-			if headsOverlap(d.BFS.MySurfBFS[i][0].Heads, d.BFS.MySurfBFS[j][0].Heads) {
-				d.BFS.MyPlan[i].Conflicting = true
-				d.BFS.MyPlan[i].ConflictWith = j
-				d.BFS.MyPlan[j].Conflicting = true
-				d.BFS.MyPlan[j].ConflictWith = i
+			if headsOverlap(d.BFS.SurfBFS[si][0].Heads, d.BFS.SurfBFS[sj][0].Heads) {
+				d.BFS.Plan[si].Conflicting = true
+				d.BFS.Plan[si].ConflictWith = j
+				d.BFS.Plan[sj].Conflicting = true
+				d.BFS.Plan[sj].ConflictWith = i
 			}
 		}
 	}

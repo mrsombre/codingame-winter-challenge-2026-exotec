@@ -21,8 +21,8 @@ func (d *Decision) phaseAssignment() {
 			}
 			// Conflict: two snakes targeting the same apple.
 			// The one with shorter BFS distance keeps it; the other gets next-best.
-			distI := reachDistFor(d.BFS.MyReach[i], d.Assigned[i])
-			distJ := reachDistFor(d.BFS.MyReach[j], d.Assigned[j])
+			distI := reachDistFor(d.BFS.Reach[d.MySnakes[i]], d.Assigned[i])
+			distJ := reachDistFor(d.BFS.Reach[d.MySnakes[j]], d.Assigned[j])
 
 			loser := j
 			if distJ < distI {
@@ -38,7 +38,7 @@ func (d *Decision) phaseAssignment() {
 			}
 
 			d.Assigned[loser] = -1
-			for _, ri := range d.BFS.MyReach[loser] {
+			for _, ri := range d.BFS.Reach[d.MySnakes[loser]] {
 				if !taken[ri.Apple] {
 					d.Assigned[loser] = ri.Apple
 					// Sync direction to match new target

@@ -3,10 +3,8 @@ package main
 // --- Phase 5: Safety ---
 
 const (
-	safetyFloodMinAbs       = 4 // absolute minimum flood count
-	safetyFloodBodyMul      = 2 // flood must be >= bodyLen * this
-	safetyCorridorMargin    = 2 // cramped if flood < bodyLen + this
-	safetyCorridorEscapeMul = 3 // escape dir needs flood >= bodyLen * this
+	safetyFloodMinAbs = 3 // absolute minimum flood to not be "dead end"
+	safetyFloodCramped = 6 // below this = cramped
 )
 
 // SafetyScratch holds pre-allocated buffers for phaseSafety.
@@ -104,6 +102,34 @@ func (d *Decision) buildBlockedForSnake(sim *Sim, sc *SafetyScratch, snIdx int) 
 	}
 }
 
+// isGroundedByOtherSnake checks if any cell in body has another snake's body below it.
+func isGroundedByOtherSnake(g *Game, body []int, excludeSnIdx int) bool {
+	for _, c := range body {
+		if c < 0 || c >= g.NCells {
+			continue
+		}
+		below := c + g.Stride
+		if below < 0 || below >= g.NCells {
+			continue
+		}
+		for i := 0; i < g.SNum; i++ {
+			if i == excludeSnIdx {
+				continue
+			}
+			sn := &g.Sn[i]
+			if !sn.Alive {
+				continue
+			}
+			for _, bc := range sn.Body {
+				if bc == below {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func (d *Decision) phaseSafety() {
 	d.ensureSafety()
 	sim := NewSim(d.G)
@@ -111,9 +137,111 @@ func (d *Decision) phaseSafety() {
 
 	d.phaseSafetyLayer1(sim)
 	d.phaseSafetyLayer2()
+	d.phaseSafetyFriendly()
+	d.phaseSafetyValidate()
 }
 
-// phaseSafetyLayer1 overrides AssignedDir when flood fill detects cramped space.
+// phaseSafetyFriendly prevents our own snakes from colliding head-on.
+// If two friendly snakes will move to the same cell, the one with worse
+// flood count changes direction.
+func (d *Decision) phaseSafetyFriendly() {
+	g := d.G
+	sc := &d.Safety
+	myN := len(d.MySnakes)
+	if myN <= 1 {
+		return
+	}
+
+	// Compute next head cell for each snake
+	nextHead := make([]int, myN)
+	for si, snIdx := range d.MySnakes {
+		sn := &g.Sn[snIdx]
+		if !sn.Alive || sn.Len == 0 {
+			nextHead[si] = -1
+			continue
+		}
+		nextHead[si] = g.Nbm[sn.Body[0]][d.AssignedDir[si]]
+	}
+
+	for i := 0; i < myN; i++ {
+		if nextHead[i] < 0 {
+			continue
+		}
+		for j := i + 1; j < myN; j++ {
+			if nextHead[j] < 0 || nextHead[j] != nextHead[i] {
+				continue
+			}
+			// Collision! The snake with worse flood changes direction
+			loser := j
+			fi := sc.floodByDir[d.AssignedDir[i]]
+			fj := sc.floodByDir[d.AssignedDir[j]]
+			if fj > fi {
+				loser = i
+			}
+
+			// Find best alternative for loser
+			snIdx := d.MySnakes[loser]
+			sn := &g.Sn[snIdx]
+			head := sn.Body[0]
+			neck := neckOf(sn.Body)
+			bestDir := d.AssignedDir[loser]
+			bestFlood := -1
+
+			for dir := 0; dir < 4; dir++ {
+				nb := g.Nbm[head][dir]
+				if nb < 0 || nb == neck {
+					continue
+				}
+				// Don't pick the collision cell
+				if nb == nextHead[i] || nb == nextHead[j] {
+					continue
+				}
+				flood := sc.floodByDir[dir]
+				if flood > bestFlood {
+					bestFlood = flood
+					bestDir = dir
+				}
+			}
+
+			d.AssignedDir[loser] = bestDir
+			nextHead[loser] = g.Nbm[sn.Body[0]][bestDir]
+		}
+	}
+}
+
+// phaseSafetyValidate ensures no snake is assigned the backward direction.
+// Backward = opposite of current facing. Engine ignores backward commands
+// (treats as forward), which wastes a turn.
+func (d *Decision) phaseSafetyValidate() {
+	g := d.G
+	for si, snIdx := range d.MySnakes {
+		sn := &g.Sn[snIdx]
+		if !sn.Alive || sn.Len == 0 {
+			continue
+		}
+		if d.AssignedDir[si] == Do[sn.Dir] {
+			d.AssignedDir[si] = fallbackDir(g, sn)
+		}
+	}
+}
+
+// Direction safety tier (lower = worse).
+const (
+	tierDead     = 0 // falls off map, len-3 beheading, no valid moves
+	tierBehead   = 1 // beheading (lose segment) — big no
+	tierBlocked  = 2 // moves into other snake body
+	tierDeadEnd  = 3 // survives but 0 flood (no next move)
+	tierCramped  = 4 // survives but very tight space
+	tierSafe     = 5 // good flood, safe move
+)
+
+type dirEval struct {
+	tier  int
+	flood int
+}
+
+// phaseSafetyLayer1 evaluates each direction by safety tier and overrides
+// AssignedDir when the assigned direction is worse than alternatives.
 func (d *Decision) phaseSafetyLayer1(sim *Sim) {
 	g := d.G
 	sc := &d.Safety
@@ -131,46 +259,69 @@ func (d *Decision) phaseSafetyLayer1(sim *Sim) {
 		d.buildBlockedForSnake(sim, sc, snIdx)
 
 		neck := neckOf(sn.Body)
-		bodyLen := sn.Len
+		floodThresh := safetyFloodCramped
 
-		// Flood threshold
-		floodThresh := bodyLen * safetyFloodBodyMul
-		if floodThresh < safetyFloodMinAbs {
-			floodThresh = safetyFloodMinAbs
-		}
-
-		bestFlood := -1
-		bestFloodDir := -1
-		assignedFlood := -1
-
+		var evals [4]dirEval
 		for dir := 0; dir < 4; dir++ {
 			sc.floodByDir[dir] = -1
+			evals[dir] = dirEval{tier: tierDead, flood: -1}
 
 			nb := g.Nbm[head][dir]
 			if nb < 0 || nb == neck {
 				continue
 			}
 
-			// Simulate move + gravity
+			// Out of grid
+			if !g.IsInGrid(nb) {
+				evals[dir] = dirEval{tier: tierDead, flood: 0}
+				sc.floodByDir[dir] = 0
+				continue
+			}
+
+			// Other snake body collision (before gravity)
+			if sc.blocked[nb] {
+				evals[dir] = dirEval{tier: tierBlocked, flood: 0}
+				sc.floodByDir[dir] = 0
+				continue
+			}
+
+			// Simulate move
 			newBody, alive := sim.simulateMove(sn.Body, dir)
 			if !alive {
 				continue
 			}
 
-			// Detect beheading: simulateMove returns shorter body on wall/self collision
 			beheaded := len(newBody) < sn.Len
+
+			// Beheading kills len-3 snake
+			if beheaded && sn.Len <= 3 {
+				evals[dir] = dirEval{tier: tierDead, flood: 0}
+				sc.floodByDir[dir] = 0
+				continue
+			}
+
+			// Beheading for longer snakes — big no, avoid if possible
+			if beheaded {
+				evals[dir] = dirEval{tier: tierBehead, flood: 0}
+				sc.floodByDir[dir] = 0
+				continue
+			}
 
 			bodycp := sc.bodyBuf[:len(newBody)]
 			copy(bodycp, newBody)
 
 			if !sim.applyGravity(bodycp) {
-				sc.floodByDir[dir] = 0
-				continue
+				if !isGroundedByOtherSnake(g, bodycp, snIdx) {
+					evals[dir] = dirEval{tier: tierDead, flood: 0}
+					sc.floodByDir[dir] = 0
+					continue
+				}
+				copy(bodycp, newBody)
 			}
 
 			newHead := bodycp[0]
 
-			// Temporarily block own post-move body[1:] for flood
+			// Flood fill with own post-move body blocked
 			extraStart := sc.blockedN
 			for _, c := range bodycp[1:] {
 				if c >= 0 && c < g.NCells && !sc.blocked[c] {
@@ -181,51 +332,76 @@ func (d *Decision) phaseSafetyLayer1(sim *Sim) {
 			}
 
 			flood := floodCount(g, sc, newHead)
-
-			// Beheading moves lose a segment — never prefer them as "best flood"
-			if beheaded {
-				flood = 0
-			}
 			sc.floodByDir[dir] = flood
 
-			// Unblock own body
 			for i := extraStart; i < sc.blockedN; i++ {
 				sc.blocked[sc.blockedPrev[i]] = false
 			}
 			sc.blockedN = extraStart
 
-			if flood > bestFlood {
-				bestFlood = flood
-				bestFloodDir = dir
+			// Classify tier
+			switch {
+			case flood == 0:
+				evals[dir] = dirEval{tier: tierDeadEnd, flood: 0}
+			case flood < floodThresh:
+				evals[dir] = dirEval{tier: tierCramped, flood: flood}
+			default:
+				evals[dir] = dirEval{tier: tierSafe, flood: flood}
 			}
-			if dir == d.AssignedDir[si] {
-				assignedFlood = flood
+		}
+
+		// Only override if assigned direction is dangerous (tier < tierSafe)
+		assigned := d.AssignedDir[si]
+		assignedEval := evals[assigned]
+
+		if assignedEval.tier >= tierSafe {
+			continue // assigned direction is fine, don't override
+		}
+
+		// Find safest alternative
+		bestDir := assigned
+		bestEval := assignedEval
+
+		for dir := 0; dir < 4; dir++ {
+			e := evals[dir]
+			if e.tier > bestEval.tier ||
+				(e.tier == bestEval.tier && e.flood > bestEval.flood) {
+				bestEval = e
+				bestDir = dir
 			}
 		}
 
-		if bestFloodDir < 0 {
-			continue // no valid direction at all
-		}
+		d.AssignedDir[si] = bestDir
 
-		// Override if assigned direction leads to cramped space
-		if assignedFlood >= 0 && assignedFlood < floodThresh && bestFlood > assignedFlood {
-			d.AssignedDir[si] = bestFloodDir
-			assignedFlood = bestFlood
-		}
-
-		// Cramped corridor: if very tight and a much better option exists
-		corridorThresh := bodyLen + safetyCorridorMargin
-		escapeThresh := bodyLen * safetyCorridorEscapeMul
-		if assignedFlood >= 0 && assignedFlood < corridorThresh && bestFlood >= escapeThresh {
-			d.AssignedDir[si] = bestFloodDir
+		// Tail chase: when all options are cramped or worse, prefer tail direction
+		if bestEval.tier <= tierCramped && sn.Len > 1 {
+			tail := sn.Body[sn.Len-1]
+			tailAdj := -1
+			for dir := 0; dir < 4; dir++ {
+				if g.Nbm[head][dir] == tail {
+					tailAdj = dir
+					break
+				}
+			}
+			if tailAdj >= 0 && evals[tailAdj].tier >= tierDeadEnd {
+				d.AssignedDir[si] = tailAdj
+			} else {
+				tailDir := g.DirFromTo(head, tail)
+				if tailDir >= 0 && evals[tailDir].tier > bestEval.tier {
+					d.AssignedDir[si] = tailDir
+				}
+			}
 		}
 	}
 }
 
 // phaseSafetyLayer2 checks for enemy head collisions and overrides if dangerous.
+// Exceptions: allows head-on when we survive and they die, allows apple contests.
 func (d *Decision) phaseSafetyLayer2() {
 	g := d.G
 	sc := &d.Safety
+	sim := NewSim(g)
+	sim.RebuildAppleMap()
 
 	if len(d.OpSnakes) == 0 {
 		return
@@ -243,13 +419,17 @@ func (d *Decision) phaseSafetyLayer2() {
 		}
 		assignedDir := d.AssignedDir[si]
 
-		// Our planned next head
 		myNextHead := g.Nbm[head][assignedDir]
 		if myNextHead < 0 {
 			continue
 		}
 
-		// Check if any enemy can collide with our next head
+		// Apple contest: if our target cell is an apple, allow collision
+		// (deny free eat to enemy)
+		if sim.isApple(myNextHead) {
+			continue
+		}
+
 		dangerous := false
 		for _, opIdx := range d.OpSnakes {
 			op := &g.Sn[opIdx]
@@ -262,13 +442,17 @@ func (d *Decision) phaseSafetyLayer2() {
 			}
 			opNeck := neckOf(op.Body)
 
-			// Check head-on: enemy's possible next heads
+			// Head-on check: enemy's possible next heads
 			for dir := 0; dir < 4; dir++ {
 				opNext := g.Nbm[opHead][dir]
 				if opNext < 0 || opNext == opNeck {
 					continue
 				}
 				if opNext == myNextHead {
+					// Allow if we're >3 and enemy is <=3: they die, we survive
+					if sn.Len > 3 && op.Len <= 3 {
+						continue
+					}
 					dangerous = true
 					break
 				}
@@ -277,14 +461,14 @@ func (d *Decision) phaseSafetyLayer2() {
 				break
 			}
 
-			// Check if our next head lands in enemy body (excl. movable tail)
+			// Body collision check (excl. head and movable tail)
 			tailIdx := op.Len - 1
 			for bi, c := range op.Body {
 				if bi == 0 {
-					continue // enemy head will move away
+					continue
 				}
 				if bi == tailIdx {
-					continue // tail will vacate (approximate)
+					continue
 				}
 				if c == myNextHead {
 					dangerous = true
@@ -300,7 +484,7 @@ func (d *Decision) phaseSafetyLayer2() {
 			continue
 		}
 
-		// Find safest alternative: highest flood that avoids collision
+		// Find safest alternative
 		neck := neckOf(sn.Body)
 		bestDir := assignedDir
 		bestFlood := sc.floodByDir[assignedDir]
@@ -317,7 +501,7 @@ func (d *Decision) phaseSafetyLayer2() {
 				continue
 			}
 
-			// Check this alternative is also safe from enemy collision
+			// Check this alternative is safe from enemy collision
 			altDanger := false
 			for _, opIdx := range d.OpSnakes {
 				op := &g.Sn[opIdx]
@@ -335,6 +519,10 @@ func (d *Decision) phaseSafetyLayer2() {
 						continue
 					}
 					if opNext == nb {
+						// Same exception: allow if we survive
+						if sn.Len > 3 && op.Len <= 3 {
+							continue
+						}
 						altDanger = true
 						break
 					}
@@ -344,7 +532,6 @@ func (d *Decision) phaseSafetyLayer2() {
 				}
 			}
 
-			// Prefer non-dangerous with high flood
 			flood := sc.floodByDir[dir]
 			if !altDanger && flood > bestFlood {
 				bestFlood = flood

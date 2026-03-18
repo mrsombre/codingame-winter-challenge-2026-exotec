@@ -103,7 +103,7 @@ func TestPlanUpdateAppleSurfacesMarksSurfNoneAndRemovesReach(t *testing.T) {
 
 	g.Ap = []int{keptApple}
 	g.ANum = len(g.Ap)
-	p.UpdateAppleSurfaces()
+	p.Turn()
 
 	assert.Equal(t, SurfNone, g.Surfs[removedSID].Type, "removed apple surface should become SurfNone")
 

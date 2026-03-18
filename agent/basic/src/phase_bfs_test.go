@@ -123,9 +123,10 @@ func TestPhaseBFSPopulatesTargets(t *testing.T) {
 
 	assert.Equal(t, []int{0}, d.MySnakes)
 	assert.Equal(t, []int{1}, d.OpSnakes)
-	assert.Len(t, d.BFS.MyReach[0], 1)
-	assert.Equal(t, g.Idx(0, 3), d.BFS.MyReach[0][0].Apple)
-	assert.Equal(t, g.Idx(0, 3), d.Assigned[0])
-	assert.Equal(t, DL, d.AssignedDir[0])
-	assert.Len(t, d.BFS.OpReach[0], 1)
+	mySnIdx := d.MySnakes[0]
+	assert.Len(t, d.BFS.Reach[mySnIdx], 1)
+	assert.Equal(t, g.Idx(0, 3), d.BFS.Reach[mySnIdx][0].Apple)
+	assert.Equal(t, -1, d.Assigned[0], "phaseBFS no longer assigns targets")
+	opSnIdx := d.OpSnakes[0]
+	assert.Len(t, d.BFS.Reach[opSnIdx], 1)
 }

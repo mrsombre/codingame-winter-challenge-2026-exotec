@@ -104,15 +104,31 @@ func TestPrintMap(t *testing.T) {
 		Plan  *PlanJSON    `json:"plan,omitempty"`
 	}
 
+	type AppleHeatJSON struct {
+		X         int `json:"x"`
+		Y         int `json:"y"`
+		Heat      int `json:"heat"`
+		MyDist    int `json:"myDist"`
+		OpDist    int `json:"opDist"`
+		ClusterID int `json:"clusterId"`
+	}
+
+	type ClusterJSON struct {
+		ID     int          `json:"id"`
+		Apples []debugCoord `json:"apples"`
+		Size   int          `json:"size"`
+	}
+
 	type MapJSON struct {
-		Seed     int64        `json:"seed"`
-		League   int          `json:"league"`
-		W        int          `json:"w"`
-		H        int          `json:"h"`
-		Walls    []debugCoord `json:"walls"`
-		Apples   []debugCoord `json:"apples"`
-		Snakes   []SnakeJSON  `json:"snakes"`
-		Surfaces []SurfJSON   `json:"surfaces"`
+		Seed     int64           `json:"seed"`
+		League   int             `json:"league"`
+		W        int             `json:"w"`
+		H        int             `json:"h"`
+		Walls    []debugCoord    `json:"walls"`
+		Apples   []AppleHeatJSON `json:"apples"`
+		Snakes   []SnakeJSON     `json:"snakes"`
+		Surfaces []SurfJSON      `json:"surfaces"`
+		Clusters []ClusterJSON   `json:"clusters"`
 	}
 
 	toCoord := func(cell int) debugCoord {
@@ -129,10 +145,7 @@ func TestPrintMap(t *testing.T) {
 		}
 	}
 
-	apples := make([]debugCoord, g.ANum)
-	for i := 0; i < g.ANum; i++ {
-		apples[i] = toCoord(g.Ap[i])
-	}
+	// apples built after snake reach is computed (need heat data)
 
 	dirName := func(d int) string {
 		if d >= 0 && d < 4 {
@@ -159,9 +172,11 @@ func TestPrintMap(t *testing.T) {
 		}
 	}
 
-	// Compute BFS plans
-	sim := NewSim(g)
-	sim.RebuildAppleMap()
+	// Run real pipeline: phaseBFS + phaseInfluence
+	pl := &Plan{G: g}
+	d := &Decision{G: g, P: pl}
+	d.phaseBFS()
+	d.phaseInfluence()
 
 	snakes := make([]SnakeJSON, g.SNum)
 	for i := 0; i < g.SNum; i++ {
@@ -179,7 +194,6 @@ func TestPrintMap(t *testing.T) {
 			Sp:    sn.Sp,
 		}
 
-		// Compute plan
 		head := sn.Body[0]
 		onSurf := g.IsInGrid(head) && g.SurfAt[head] >= 0 && sn.Sp == 0
 
@@ -188,18 +202,20 @@ func TestPrintMap(t *testing.T) {
 			ConflictWith: -1,
 		}
 
-		var entries []SurfReach
-		if onSurf {
-			sid := g.SurfAt[head]
-			entries = []SurfReach{{SurfID: sid, Dist: 0, FirstDir: -1, Landing: head}}
-		} else {
-			entries = sim.SurfBFS(sn)
-			plan.SurfReaches = make([]SurfReachJSON, len(entries))
-			for k, sr := range entries {
+		// Use BFS results from the unified arrays (indexed by snake slot)
+		bp := &d.BFS.Plan[i]
+		reach := bp.Apples
+		plan.Conflicting = bp.Conflicting
+		plan.ConflictWith = bp.ConflictWith
+
+		if !onSurf {
+			surfEntries := d.BFS.SurfBFS[i]
+			plan.SurfReaches = make([]SurfReachJSON, len(surfEntries))
+			for k, sr := range surfEntries {
 				plan.SurfReaches[k] = toSurfReachJSON(sr)
 			}
 		}
-		reach := surfGraphReach(g, entries, sn.Len, head)
+
 		plan.Apples = make([]ReachAppleJSON, len(reach))
 		for k, ri := range reach {
 			plan.Apples[k] = ReachAppleJSON{
@@ -216,6 +232,22 @@ func TestPrintMap(t *testing.T) {
 
 		sj.Plan = &plan
 		snakes[i] = sj
+	}
+
+	// Build apple heat from pipeline's Influence data
+	apples := make([]AppleHeatJSON, g.ANum)
+	for i := 0; i < g.ANum; i++ {
+		ax, ay := g.XY(g.Ap[i])
+		inf := &d.Influence[i]
+		cid := -1
+		if g.ClusterAt[g.Ap[i]] >= 0 {
+			cid = g.ClusterAt[g.Ap[i]]
+		}
+		apples[i] = AppleHeatJSON{
+			X: ax, Y: ay,
+			Heat: inf.Heat, MyDist: inf.MyBest, OpDist: inf.OpBest,
+			ClusterID: cid,
+		}
 	}
 
 	surfs := make([]SurfJSON, len(g.Surfs))
@@ -264,6 +296,15 @@ func TestPrintMap(t *testing.T) {
 		}
 	}
 
+	clusters := make([]ClusterJSON, len(g.Clusters))
+	for i, cl := range g.Clusters {
+		members := make([]debugCoord, cl.Size)
+		for j, cell := range cl.Apples {
+			members[j] = toCoord(cell)
+		}
+		clusters[i] = ClusterJSON{ID: cl.ID, Apples: members, Size: cl.Size}
+	}
+
 	debugWriteJSON(t, "map.json", MapJSON{
 		Seed:     seed,
 		League:   testLeague,
@@ -273,6 +314,7 @@ func TestPrintMap(t *testing.T) {
 		Apples:   apples,
 		Snakes:   snakes,
 		Surfaces: surfs,
+		Clusters: clusters,
 	})
 }
 

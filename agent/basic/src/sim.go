@@ -362,11 +362,12 @@ func (s *Sim) applyGravity(body []int) bool {
 // --- SimBFS ---
 
 const (
-	simMaxTargets  = 5 // stop after finding this many apple targets
-	simMaxEatDepth = 2 // apple eating grows body only within this many steps
+	simMaxEatDepth     = 2 // apple eating grows body only within this many steps
+	simAppleMaxDepth   = 7 // max depth for SimBFSApples
+	simAppleMaxTargets = 8 // max apple targets for SimBFSApples
 )
 
-// SimTarget describes a physically reachable apple found by SimBFS.
+// SimTarget describes a physically reachable apple found by SimBFSApples.
 type SimTarget struct {
 	Apple    int // apple cell index
 	Dist     int // steps to reach
@@ -392,39 +393,53 @@ func bodyHash(body []int) uint64 {
 	return h
 }
 
-// SimBFS searches for nearest reachable apples using actual body simulation.
-func (s *Sim) SimBFS(body []int) []SimTarget {
+// SimBFSApples searches for reachable apples using body simulation with
+// obstacle awareness (other snakes blocked). Depth capped at simAppleMaxDepth.
+func (s *Sim) SimBFSApples(sn *Snake) []SimTarget {
 	g := s.G
-	if len(body) == 0 || !g.IsInGrid(body[0]) {
+	if sn == nil || !sn.Alive || sn.Len == 0 {
+		return nil
+	}
+	head := sn.Body[0]
+	if !g.IsInGrid(head) {
 		return nil
 	}
 
-	s.RebuildAppleMap()
+	s.buildObstacleMap(sn.ID)
 
+	startBody := append([]int(nil), sn.Body...)
 	visited := make(map[uint64]bool)
-	visited[bodyHash(body)] = true
+	visited[bodyHash(startBody)] = true
 	queue := []simNode{{
-		body:     append([]int(nil), body...),
+		body:     startBody,
 		firstDir: -1,
 	}}
 	var targets []SimTarget
 
-	for qi := 0; qi < len(queue) && len(targets) < simMaxTargets; qi++ {
+	for qi := 0; qi < len(queue) && len(targets) < simAppleMaxTargets; qi++ {
 		cur := queue[qi]
-		head := cur.body[0]
-		if !g.IsInGrid(head) {
+		if cur.dist >= simAppleMaxDepth {
+			continue
+		}
+		curHead := cur.body[0]
+		if !g.IsInGrid(curHead) {
 			continue
 		}
 		neck := neckOf(cur.body)
 
 		for dir := 0; dir < 4; dir++ {
-			nc := g.Nbm[head][dir]
+			nc := g.Nbm[curHead][dir]
 			if nc == -1 || nc == neck {
 				continue
 			}
 
 			newBody, alive := s.simulateMove(cur.body, dir)
 			if !alive {
+				continue
+			}
+
+			// Reject beheading moves
+			if len(newBody) < len(cur.body) {
 				continue
 			}
 
@@ -443,7 +458,27 @@ func (s *Sim) SimBFS(body []int) []SimTarget {
 				bodycp = bodycp[:len(bodycp)-1]
 			}
 
-			if !s.applyGravity(bodycp) {
+			// Remove eaten apple from map so gravity doesn't use it as ground
+			if eating {
+				s.appleMap[nc] = false
+			}
+			gravOk := s.applyGravity(bodycp)
+			if eating {
+				s.appleMap[nc] = true // restore for other BFS branches
+			}
+			if !gravOk {
+				continue
+			}
+
+			// Check obstacles on settled body
+			blocked := false
+			for _, c := range bodycp {
+				if c >= 0 && c < g.NCells && s.obstacleMap[c] {
+					blocked = true
+					break
+				}
+			}
+			if blocked {
 				continue
 			}
 
@@ -468,9 +503,6 @@ func (s *Sim) SimBFS(body []int) []SimTarget {
 					FirstDir: fd,
 					Eaten:    newEaten,
 				})
-				if len(targets) >= simMaxTargets {
-					return targets
-				}
 			}
 
 			queue = append(queue, simNode{
@@ -617,15 +649,17 @@ func (s *Sim) SurfBFS(sn *Snake) []SurfReach {
 			if dir == Do[cur.prevDir] {
 				continue
 			}
-			// reject UP noop when tail is only support
-			if cur.dist == 0 && dir == DU && sn.Sp == sn.Len-1 {
-				continue
-			}
 
 			newBody, alive := s.simulateMove(cur.body, dir)
 			if !alive {
 				continue
 			}
+
+			// Reject beheading moves — never plan to lose segments
+			if len(newBody) < len(cur.body) {
+				continue
+			}
+
 			bodycp := append([]int(nil), newBody...)
 
 			if !s.applyGravity(bodycp) {

@@ -19,7 +19,7 @@ var dbgSeed int64 = -721452932309119600
 var dbgTurnLines []string = nil
 
 // dbgSnakeID: which snake to trace in BFS detail. -1 = all my snakes.
-var dbgSnakeID = 0
+var dbgSnakeID = 3
 
 // ----- Replay folder loader -----
 
@@ -103,7 +103,7 @@ func TestDbgPipeline(t *testing.T) {
 		hx, hy := g.XY(sn.Body[0])
 		t.Logf("[%d] snake %d  head=(%d,%d) dir=%s sp=%d len=%d",
 			si, sn.ID, hx, hy, Dn[sn.Dir], sn.Sp, sn.Len)
-		plan := &d.BFS.MyPlan[si]
+		plan := &d.BFS.Plan[snIdx]
 		if plan.BestApple >= 0 {
 			ax, ay := g.XY(plan.BestApple)
 			t.Logf("    target=(%d,%d) dist=%d firstDir=%s conflict=%v",
@@ -111,7 +111,7 @@ func TestDbgPipeline(t *testing.T) {
 		} else {
 			t.Logf("    target=none")
 		}
-		for _, ri := range d.BFS.MyReach[si] {
+		for _, ri := range d.BFS.Reach[snIdx] {
 			ax, ay := g.XY(ri.Apple)
 			t.Logf("    reach (%d,%d) d=%d dir=%s surf=%d", ax, ay, ri.Dist, safeDir(ri.FirstDir), ri.EndSurf)
 		}

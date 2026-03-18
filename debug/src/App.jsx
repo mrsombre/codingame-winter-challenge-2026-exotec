@@ -56,6 +56,98 @@ function layerSurfaces(key, { surfMap, linkPathSet, appleLinkPathSet, appleLinkD
   return { bg: '', content, outline }
 }
 
+// Cluster color palette: 10 distinct hues
+const clusterColors = [
+  'hsl(0,70%,55%)', 'hsl(36,70%,55%)', 'hsl(72,70%,55%)',
+  'hsl(108,70%,55%)', 'hsl(144,70%,55%)', 'hsl(180,70%,55%)',
+  'hsl(216,70%,55%)', 'hsl(252,70%,55%)', 'hsl(288,70%,55%)',
+  'hsl(324,70%,55%)',
+]
+
+// Layer: clusters
+function layerClusters(key, { snakeMap, clusterMap, clusterData }) {
+  const snake = snakeMap[key]
+  const cid = clusterMap[key]
+
+  let bg = ''
+  let outline = null
+  let label = null
+
+  if (cid !== undefined && cid >= 0) {
+    const cl = clusterData[cid]
+    const color = cl && cl.size > 1 ? clusterColors[cid % clusterColors.length] : '#888'
+    outline = { outline: `3px solid ${color}`, outlineOffset: '-2px' }
+    label = (
+      <span className="absolute inset-0 flex flex-col items-center justify-center text-[7px] font-bold pointer-events-none z-10 leading-tight" style={{ color }}>
+        <span>C{cid}</span>
+        {cl && <span className="text-[6px] opacity-70">×{cl.size}</span>}
+      </span>
+    )
+  }
+
+  const content = (
+    <>
+      {snake && (
+        <div
+          className={`rounded-full ${
+            snake.owner === 0 ? 'bg-purple-500' : 'bg-green-500'
+          } ${snake.isHead ? 'w-[80%] h-[80%]' : 'w-[60%] h-[60%]'}`}
+        />
+      )}
+      {label}
+    </>
+  )
+
+  return { bg, content, outline }
+}
+
+// Layer: heat map
+function layerHeat(key, { snakeMap, heatMap }) {
+  const snake = snakeMap[key]
+  const heat = heatMap[key]
+
+  let bg = ''
+  let label = null
+  if (heat !== undefined) {
+    const { heat: h, myDist, opDist } = heat
+    // Color: green = ours, red = theirs, yellow = contested
+    if (h >= 9999) {
+      bg = 'bg-green-400/70' // exclusive ours
+    } else if (h <= -9999) {
+      bg = 'bg-red-400/70' // unreachable
+    } else if (h > 0) {
+      bg = 'bg-green-300/60' // we're faster
+    } else if (h < 0) {
+      bg = 'bg-red-300/60' // they're faster
+    } else {
+      bg = 'bg-yellow-300/60' // tied
+    }
+    const myLabel = myDist >= 0 ? myDist : '-'
+    const opLabel = opDist >= 0 ? opDist : '-'
+    label = (
+      <span className="absolute inset-0 flex flex-col items-center justify-center text-[7px] font-bold text-black pointer-events-none z-10 leading-tight">
+        <span>{h >= 9999 ? '++' : h <= -9999 ? '--' : h > 0 ? `+${h}` : `${h}`}</span>
+        <span className="text-[6px] opacity-70">{myLabel}/{opLabel}</span>
+      </span>
+    )
+  }
+
+  const content = (
+    <>
+      {snake && (
+        <div
+          className={`rounded-full ${
+            snake.owner === 0 ? 'bg-purple-500' : 'bg-green-500'
+          } ${snake.isHead ? 'w-[80%] h-[80%]' : 'w-[60%] h-[60%]'}`}
+        />
+      )}
+      {label}
+    </>
+  )
+
+  return { bg, content, outline: null }
+}
+
 // Layer: BFS paths
 function layerBFS(key, { snakeMap, bfsHeadSet, bfsLandingSet, bfsAppleSet }) {
   const snake = snakeMap[key]
@@ -97,8 +189,11 @@ export default function App() {
   const [data, setData] = useState(null)
   const [cursor, setCursor] = useState(null)
   const [pinnedCell, setPinnedCell] = useState(null)
-  const [showSurfaces, setShowSurfaces] = useState(false)
-  const [showBFS, setShowBFS] = useState(false)
+  const [activeLayer, setActiveLayer] = useState(null) // null | 'surfaces' | 'bfs' | 'heat'
+  const toggleLayer = (name) => setActiveLayer((prev) => prev === name ? null : name)
+  const showSurfaces = activeLayer === 'surfaces'
+  const showBFS = activeLayer === 'bfs'
+  const showHeat = activeLayer === 'heat'
 
   const activeCell = pinnedCell || cursor
 
@@ -115,7 +210,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [pinnedCell])
 
-  const { w, h, walls, apples, snakes, surfaces, wallSet, appleSet, snakeMap, surfMap, snakeCellToId } = useMemo(() => {
+  const { w, h, walls, apples, snakes, surfaces, wallSet, appleSet, snakeMap, surfMap, snakeCellToId, heatMap, clusterMap, clusterData } = useMemo(() => {
     if (!data) return {}
     const { w, h, walls, apples, snakes, surfaces } = data
     const wallSet = new Set(walls.map((c) => `${c.x},${c.y}`))
@@ -136,7 +231,19 @@ export default function App() {
         surfMap[`${x},${s.y}`] = s.id
       }
     }
-    return { w, h, walls, apples, snakes, surfaces, wallSet, appleSet, snakeMap, surfMap, snakeCellToId }
+    const heatMap = {}
+    for (const a of apples) {
+      heatMap[`${a.x},${a.y}`] = { heat: a.heat, myDist: a.myDist, opDist: a.opDist }
+    }
+    const clusterMap = {}
+    for (const a of apples) {
+      if (a.clusterId >= 0) clusterMap[`${a.x},${a.y}`] = a.clusterId
+    }
+    const clusterData = {}
+    for (const c of (data.clusters ?? [])) {
+      clusterData[c.id] = c
+    }
+    return { w, h, walls, apples, snakes, surfaces, wallSet, appleSet, snakeMap, surfMap, snakeCellToId, heatMap, clusterMap, clusterData }
   }, [data])
 
   if (!data) return <div className="p-4 font-mono">Loading...</div>
@@ -197,8 +304,9 @@ export default function App() {
   }
 
   // Pick active layer
-  const layerCtx = { appleSet, snakeMap, surfMap, linkPathSet, appleLinkPathSet, appleLinkDotSet, bfsHeadSet, bfsLandingSet, bfsAppleSet }
-  const renderLayer = showBFS ? layerBFS : showSurfaces ? layerSurfaces : layerDefault
+  const showClusters = activeLayer === 'clusters'
+  const layerCtx = { appleSet, snakeMap, surfMap, linkPathSet, appleLinkPathSet, appleLinkDotSet, bfsHeadSet, bfsLandingSet, bfsAppleSet, heatMap, clusterMap, clusterData }
+  const renderLayer = showClusters ? layerClusters : showHeat ? layerHeat : showBFS ? layerBFS : showSurfaces ? layerSurfaces : layerDefault
 
   const cellHandlers = (x, y) => ({
     onMouseEnter: () => setCursor({ x, y }),
@@ -300,6 +408,17 @@ export default function App() {
             <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full border-2 border-cyan-300 bg-cyan-500/60" /> landing</div>
             <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full border-2 border-yellow-400 bg-yellow-300/70" /> target apple</div>
           </>}
+          {showClusters && <>
+            <div className="flex items-center gap-1"><div className="w-3 h-3 border-2 border-red-500" /> cluster (colored by ID)</div>
+            <div className="flex items-center gap-1"><div className="w-3 h-3 border-2 border-gray-400" /> isolated (size=1)</div>
+          </>}
+          {showHeat && <>
+            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-green-400/70" /> exclusive ours</div>
+            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-green-300/60" /> we're faster</div>
+            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-yellow-300/60" /> tied</div>
+            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-red-300/60" /> they're faster</div>
+            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-red-400/70" /> unreachable</div>
+          </>}
           {showSurfaces && <>
             <div className="flex items-center gap-1"><div className="w-3 h-3 bg-orange-400 rounded-full" /> surface path</div>
             <div className="flex items-center gap-1"><div className="w-3 h-3 bg-red-500 rounded-full" /> apple path</div>
@@ -307,22 +426,17 @@ export default function App() {
           </>}
         </div>
         <div className="mt-3 flex gap-2">
-          <Button
-            variant={showSurfaces ? 'default' : 'outline'}
-            size="sm"
-            className="cursor-pointer"
-            onClick={() => { setShowSurfaces(!showSurfaces); setShowBFS(false) }}
-          >
-            surfaces
-          </Button>
-          <Button
-            variant={showBFS ? 'default' : 'outline'}
-            size="sm"
-            className="cursor-pointer"
-            onClick={() => { setShowBFS(!showBFS); setShowSurfaces(false) }}
-          >
-            BFS
-          </Button>
+          {['surfaces', 'bfs', 'heat', 'clusters'].map((name) => (
+            <Button
+              key={name}
+              variant={activeLayer === name ? 'default' : 'outline'}
+              size="sm"
+              className="cursor-pointer"
+              onClick={() => toggleLayer(name)}
+            >
+              {name}
+            </Button>
+          ))}
         </div>
         {activeCell && (
           <div className="mt-4 border-t pt-2">
@@ -357,6 +471,36 @@ export default function App() {
                       ))}
                     </div>
                   )}
+                </div>
+              )
+            })()}
+            {showClusters && activeCell && (() => {
+              const cid = clusterMap[`${activeCell.x},${activeCell.y}`]
+              if (cid === undefined) return null
+              const cl = clusterData[cid]
+              if (!cl) return null
+              const color = cl.size > 1 ? clusterColors[cid % clusterColors.length] : '#888'
+              return (
+                <div className="mt-2" style={{ color }}>
+                  <p className="font-bold">cluster #{cid}</p>
+                  <p>size: {cl.size}</p>
+                  <div className="mt-1 text-[11px]">
+                    {cl.apples.map((a, i) => (
+                      <span key={i}>({a.x},{a.y}){i < cl.apples.length - 1 ? ' ' : ''}</span>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
+            {showHeat && activeCell && (() => {
+              const h = heatMap[`${activeCell.x},${activeCell.y}`]
+              if (!h) return null
+              return (
+                <div className="mt-2 text-green-400">
+                  <p className="font-bold">apple ({activeCell.x},{activeCell.y})</p>
+                  <p>heat: {h.heat >= 9999 ? '++' : h.heat <= -9999 ? '--' : h.heat}</p>
+                  <p>my dist: {h.myDist >= 0 ? h.myDist : 'unreachable'}</p>
+                  <p>op dist: {h.opDist >= 0 ? h.opDist : 'unreachable'}</p>
                 </div>
               )
             })()}

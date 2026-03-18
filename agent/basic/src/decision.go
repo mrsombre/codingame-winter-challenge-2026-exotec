@@ -35,7 +35,7 @@ type Decision struct {
 
 	BFS           BFSResult
 	Influence     [MaxAp]AppleContest    // per-apple contestation data
-	ContestByCell [MaxExpandedCells]int  // cell → contestation category
+	HeatByCell    [MaxExpandedCells]int  // cell → heat value (opDist - myDist)
 	Safety        SafetyScratch          // pre-allocated safety scratch
 }
 
