@@ -8,6 +8,8 @@
 /replay/
 /tmp/
 
+.worktrees/
+
 # front
 /debug/dist/
 /debug/node_modules/
