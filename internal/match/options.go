@@ -166,7 +166,7 @@ Options:
   --seed <N>           Base RNG seed (default: current time)
   --seedx <N>          Seed increment per match (seed_i = seed + i*N)
   --output-matches     Include per-match results in JSON output
-  --debug              Force one match and print map/turn trace to stderr
+  --debug              Force one match, fixed sides, print map/turn trace to stderr
   --max-turns <N>      Maximum turns per match (default: 200)
   --league-level <N>   Game league level 1..4 (default: 4)
   --p0-bin <PATH>      Run player 0 as an external stdin/stdout bot binary

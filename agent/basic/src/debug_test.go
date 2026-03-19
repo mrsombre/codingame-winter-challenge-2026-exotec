@@ -126,10 +126,10 @@ func TestPrintMap(t *testing.T) {
 	}
 
 	type RouteJSON struct {
-		SnakeID  int              `json:"snakeId"`
-		Valid    bool             `json:"valid"`
-		Apples   []debugCoord     `json:"apples"`
-		Steps    []RouteStepJSON  `json:"steps"`
+		SnakeID int             `json:"snakeId"`
+		Valid   bool            `json:"valid"`
+		Apples  []debugCoord    `json:"apples"`
+		Steps   []RouteStepJSON `json:"steps"`
 	}
 
 	type MapJSON struct {

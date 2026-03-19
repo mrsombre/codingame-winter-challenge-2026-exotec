@@ -51,7 +51,7 @@ func TestResolveGapCrossingNoFall(t *testing.T) {
 	snakes := []Snake{{
 		ID: 0, Owner: 0, Alive: true,
 		Body: []int{g.Idx(4, 0), g.Idx(3, 0), g.Idx(2, 0)},
-		Len: 3,
+		Len:  3,
 	}}
 
 	s.resolveMove(snakes)
@@ -78,7 +78,7 @@ func TestResolveFallToFloor(t *testing.T) {
 	snakes := []Snake{{
 		ID: 0, Owner: 0, Alive: true,
 		Body: []int{g.Idx(2, 2), g.Idx(2, 1), g.Idx(2, 0)},
-		Len: 3,
+		Len:  3,
 	}}
 
 	s.resolveMove(snakes)

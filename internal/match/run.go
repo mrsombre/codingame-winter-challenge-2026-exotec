@@ -23,6 +23,8 @@ type runnerMetadata struct {
 	OutputMatches bool   `json:"output_matches"`
 	MaxTurns      int    `json:"max_turns"`
 	LeagueLevel   int    `json:"league_level"`
+	P0Left        int    `json:"p0_left"`
+	P0Right       int    `json:"p0_right"`
 }
 
 func Run(args []string, stdout io.Writer) error {
@@ -46,6 +48,13 @@ func Run(args []string, stdout io.Writer) error {
 	})
 	results := runMatches(parsed.BatchOptions, runner.RunMatch)
 
+	p0Left := 0
+	for _, r := range results {
+		if !r.Swapped {
+			p0Left++
+		}
+	}
+
 	out := runnerOutput{
 		P0Bin: parsed.P0Bin,
 		P1Bin: parsed.P1Bin,
@@ -57,6 +66,8 @@ func Run(args []string, stdout io.Writer) error {
 			OutputMatches: parsed.OutputMatches,
 			MaxTurns:      parsed.MaxTurns,
 			LeagueLevel:   parsed.LeagueLevel,
+			P0Left:        p0Left,
+			P0Right:       len(results) - p0Left,
 		},
 		Summary: SummarizeMatches(results),
 	}

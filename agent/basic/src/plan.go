@@ -513,7 +513,7 @@ func (p *Plan) buildClusters() {
 		}
 		// Singleton: find closest apple in a bigger cluster
 		bestJ := -1
-		bestDist := 1<<30
+		bestDist := 1 << 30
 		for j := 0; j < g.ANum; j++ {
 			if find(j) == find(i) || rootSize[find(j)] <= 1 {
 				continue

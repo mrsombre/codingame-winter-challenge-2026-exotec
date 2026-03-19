@@ -60,6 +60,7 @@ type MatchResult struct {
 	MapWidth          int
 	MapHeight         int
 	Apples            int
+	Swapped           bool
 }
 
 func (r MatchResult) SimulationID() int { return r.ID }
@@ -162,6 +163,9 @@ func (r MatchResult) RenderMatch() string {
 }
 
 func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
+	// Swap sides unless in debug mode. Uses seed bit for deterministic ~50/50 split.
+	swapSides := !runner.Options.Debug && seed%2 != 0
+
 	players := []*engine.Player{
 		engine.NewPlayer(0),
 		engine.NewPlayer(1),
@@ -176,7 +180,12 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 		printDebugMap(seed, game)
 	}
 
-	controllers, cleanup, err := attachCommandPlayers(runner.Options, players)
+	matchOptions := runner.Options
+	if swapSides {
+		matchOptions.P0Bin, matchOptions.P1Bin = matchOptions.P1Bin, matchOptions.P0Bin
+	}
+
+	controllers, cleanup, err := attachCommandPlayers(matchOptions, players)
 	if err != nil {
 		panic(err)
 	}
@@ -240,7 +249,12 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 	}
 	referee.OnEnd()
 
-	return buildMatchResult(simulationID, seed, turn, referee.Game, players, controllers)
+	result := buildMatchResult(simulationID, seed, turn, referee.Game, players, controllers)
+	if swapSides {
+		result = swapMatchSides(result)
+		result.Swapped = true
+	}
+	return result
 }
 
 func handlePlayerCommands(players []*engine.Player, referee *engine.Referee) {
@@ -355,6 +369,26 @@ func liveBirdCount(player *engine.Player) int {
 		}
 	}
 	return count
+}
+
+// swapMatchSides flips all p0/p1 fields so that results always refer to
+// the original --p0-bin / --p1-bin regardless of engine-side assignment.
+func swapMatchSides(r MatchResult) MatchResult {
+	r.Scores[0], r.Scores[1] = r.Scores[1], r.Scores[0]
+	r.Losses[0], r.Losses[1] = r.Losses[1], r.Losses[0]
+	r.SegmentsLost[0], r.SegmentsLost[1] = r.SegmentsLost[1], r.SegmentsLost[0]
+	r.BotsLost[0], r.BotsLost[1] = r.BotsLost[1], r.BotsLost[0]
+	r.LossReasons[0], r.LossReasons[1] = r.LossReasons[1], r.LossReasons[0]
+	r.TimeToFirstAnswer[0], r.TimeToFirstAnswer[1] = r.TimeToFirstAnswer[1], r.TimeToFirstAnswer[0]
+	r.TimeToTurnP99[0], r.TimeToTurnP99[1] = r.TimeToTurnP99[1], r.TimeToTurnP99[0]
+	r.TimeToTurnMax[0], r.TimeToTurnMax[1] = r.TimeToTurnMax[1], r.TimeToTurnMax[0]
+	switch r.Winner {
+	case 0:
+		r.Winner = 1
+	case 1:
+		r.Winner = 0
+	}
+	return r
 }
 
 func lossReasonFor(player *engine.Player, winner, playerIndex int) LossReason {

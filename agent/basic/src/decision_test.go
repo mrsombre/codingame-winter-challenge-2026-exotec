@@ -28,6 +28,9 @@ var replayDir = filepath.Join("..", "..", "..", "replay")
 // replayDataLine matches lines that are turn data: start with digit(s).
 var replayDataLine = regexp.MustCompile(`^\d`)
 
+// replayTurnHeader matches "--- turn N p0 input ---" section markers.
+var replayTurnHeader = regexp.MustCompile(`^--- turn \d+ p0 input ---$`)
+
 func loadReplaySeed() (int64, bool) {
 	data, err := os.ReadFile(filepath.Join(replayDir, "seed.txt"))
 	if err != nil {
@@ -52,12 +55,27 @@ func loadReplayTurn() ([]string, bool) {
 	if raw == "" {
 		return nil, false
 	}
-	// Filter: keep only lines starting with a digit (turn data)
+	// Find first "--- turn N p0 input ---" section and keep only its
+	// digit-starting lines. This avoids mixing in global input lines
+	// (player index, grid dimensions, bot IDs) that also start with digits.
+	allLines := strings.Split(raw, "\n")
 	var lines []string
-	for _, line := range strings.Split(raw, "\n") {
+	inSection := false
+	for _, line := range allLines {
 		line = strings.TrimSpace(line)
-		if replayDataLine.MatchString(line) {
-			lines = append(lines, line)
+		if replayTurnHeader.MatchString(line) {
+			if inSection {
+				break // hit next turn section, stop
+			}
+			inSection = true
+			continue
+		}
+		if inSection {
+			if replayDataLine.MatchString(line) {
+				lines = append(lines, line)
+			} else {
+				break // non-data line ends the section
+			}
 		}
 	}
 	if len(lines) == 0 {

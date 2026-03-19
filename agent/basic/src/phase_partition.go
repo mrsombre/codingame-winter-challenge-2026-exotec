@@ -302,9 +302,9 @@ func (d *Decision) planAllRoutes() {
 
 		// Each alive bot finds its closest reachable apple.
 		type candidate struct {
-			si    int
-			apple int
-			dist  int
+			si     int
+			apple  int
+			dist   int
 			target SimTarget
 		}
 		var candidates []candidate

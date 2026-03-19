@@ -3,7 +3,7 @@ version: '3'
 vars:
   BIN_DIR: '{{.ROOT_DIR}}/bin'
   LOGIC: basic
-  ENGINE_ARGS: --simulations 30 --parallel 5 --seed 50
+  ENGINE_ARGS: --simulations 50 --parallel 5 --seed 750000000000000000
   GAME_ARGS: --max-turns 50 --league-level 3
   P0: '{{.LOGIC}}'
   P1: opponent
@@ -40,14 +40,20 @@ tasks:
       - mkdir -p {{.BIN_DIR}}
       - go build -o {{.BIN_DIR}}/opponent ./agent/opponent
 
+  build-arena:
+    desc: Build the match runner binary into ./bin/arena
+    silent: true
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -o {{.BIN_DIR}}/arena ./cmd/match
+
   match:
     desc: Build and run the selected agent against the default opponent
     silent: true
     deps:
       - build-agent
-      - build-opponent
     cmds:
-      - go run ./cmd/match --p0-bin {{.BIN_DIR}}/{{.LOGIC}} --p1-bin {{.BIN_DIR}}/opponent {{.ENGINE_ARGS}} {{.GAME_ARGS}}
+      - '{{.BIN_DIR}}/arena --p0-bin {{.BIN_DIR}}/{{.LOGIC}} --p1-bin {{.BIN_DIR}}/opponent {{.ENGINE_ARGS}} {{.GAME_ARGS}}'
 
   replay:
     desc: Regenerate debug JSON in ./debug/public
