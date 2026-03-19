@@ -1,0 +1,68 @@
+version: '3'
+
+vars:
+  BIN_DIR: '{{.ROOT_DIR}}/bin'
+  LOGIC: basic
+  ENGINE_ARGS: --simulations 30 --parallel 5 --seed 50
+  GAME_ARGS: --max-turns 50 --league-level 3
+  P0: '{{.LOGIC}}'
+  P1: opponent
+
+env:
+  GOCACHE: '{{.ROOT_DIR}}/tmp/go-build'
+  GOMAXPROCS: '1'
+
+tasks:
+  test:
+    desc: Run tests for the selected agent logic
+    cmds:
+      - go test ./agent/{{.LOGIC}}/src
+
+  bundle-agent:
+    desc: Generate the arena bundle for the selected agent logic
+    silent: true
+    cmds:
+      - cgmerge --dir agent/{{.LOGIC}}/src --output agent/{{.LOGIC}}/bundle/bundle.go >/dev/null
+
+  build-agent:
+    desc: Build an agent binary into ./bin/<logic>
+    silent: true
+    deps:
+      - bundle-agent
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -o {{.BIN_DIR}}/{{.LOGIC}} ./agent/{{.LOGIC}}/bundle
+
+  build-opponent:
+    desc: Build the baseline opponent into ./bin/opponent
+    silent: true
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -o {{.BIN_DIR}}/opponent ./agent/opponent
+
+  match:
+    desc: Build and run the selected agent against the default opponent
+    silent: true
+    deps:
+      - build-agent
+      - build-opponent
+    cmds:
+      - go run ./cmd/match --p0-bin {{.BIN_DIR}}/{{.LOGIC}} --p1-bin {{.BIN_DIR}}/opponent {{.ENGINE_ARGS}} {{.GAME_ARGS}}
+
+  replay:
+    desc: Regenerate debug JSON in ./debug/public
+    cmds:
+      - go test -tags debug ./agent/{{.LOGIC}}/src -run "^TestPrint" -v
+
+  debug:
+    desc: Launch the debug frontend after regenerating replay data
+    deps:
+      - replay
+    dir: debug
+    cmds:
+      - pnpm dev
+
+  clean:
+    desc: Remove built binaries
+    cmds:
+      - rm -rf {{.BIN_DIR}}

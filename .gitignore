@@ -1,14 +1,14 @@
-.claude/settings.local.json
+/.claude/settings.local.json
 
-source/
+/source/
 
-bundle.go
-bin/
+**/bundle.go
+/bin/
 
-replay/
-tmp/
+/replay/
+/tmp/
 
 # front
-dist/
-node_modules/
-public/
+/debug/dist/
+/debug/node_modules/
+/debug/public/

@@ -332,6 +332,7 @@ func (d *Decision) phaseSafetyLayer1(sim *Sim) {
 			}
 
 			flood := floodCount(g, sc, newHead)
+
 			sc.floodByDir[dir] = flood
 
 			for i := extraStart; i < sc.blockedN; i++ {

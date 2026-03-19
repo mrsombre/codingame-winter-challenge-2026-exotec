@@ -362,9 +362,9 @@ func (s *Sim) applyGravity(body []int) bool {
 // --- SimBFS ---
 
 const (
-	simMaxEatDepth     = 2 // apple eating grows body only within this many steps
-	simAppleMaxDepth   = 7 // max depth for SimBFSApples
-	simAppleMaxTargets = 8 // max apple targets for SimBFSApples
+	simMaxEatDepth     = 2  // apple eating grows body only within this many steps
+	simAppleMaxDepth   = 10 // max depth for SimBFSApples
+	simAppleMaxTargets = 10 // max apple targets for SimBFSApples
 )
 
 // SimTarget describes a physically reachable apple found by SimBFSApples.

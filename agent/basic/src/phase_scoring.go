@@ -2,6 +2,7 @@ package main
 
 import "sort"
 
+
 const (
 	// Constellation scoring weights.
 	// Distance penalizes once (closest apple), not per apple.
@@ -74,39 +75,26 @@ func (d *Decision) constScore(snIdx int, cl *Constellation) int {
 }
 
 // constBestApple finds the closest reachable apple in a constellation.
-// Skips apples that support the surface the snake's head is currently on
-// (eating them destroys the walking platform). Other apples are fine.
+// Sticky: if previous target is still alive and reachable in this cluster, keep it.
 // Returns (apple cell, firstDir, found).
-func (d *Decision) constBestApple(snIdx int, cl *Constellation) (int, int, bool) {
-	g := d.G
+func (d *Decision) constBestApple(snIdx int, cl *Constellation, prevTarget int) (int, int, bool) {
 	reach := d.BFS.Reach[snIdx]
-	sn := &g.Sn[snIdx]
 
 	inCluster := make(map[int]bool, cl.Size)
 	for _, ap := range cl.Apples {
 		inCluster[ap] = true
 	}
 
-	// Surface the head is standing on
-	headSurf := -1
-	if len(sn.Body) > 0 {
-		headSurf = g.SurfAt[sn.Body[0]]
-	}
-
-	// First pass: skip apples that support our head surface
-	for _, ri := range reach {
-		if !inCluster[ri.Apple] {
-			continue
-		}
-		if headSurf >= 0 && g.Surfs[headSurf].Type == SurfApple {
-			if destroysSurface(g, ri.Apple, headSurf) {
-				continue
+	// Sticky: if previous target is still in this cluster and reachable, keep it
+	if prevTarget >= 0 && inCluster[prevTarget] {
+		for _, ri := range reach {
+			if ri.Apple == prevTarget {
+				return ri.Apple, ri.FirstDir, true
 			}
 		}
-		return ri.Apple, ri.FirstDir, true
 	}
 
-	// Fallback: accept any apple
+	// Otherwise: closest cluster apple
 	for _, ri := range reach {
 		if !inCluster[ri.Apple] {
 			continue
@@ -114,16 +102,6 @@ func (d *Decision) constBestApple(snIdx int, cl *Constellation) (int, int, bool)
 		return ri.Apple, ri.FirstDir, true
 	}
 	return -1, -1, false
-}
-
-// destroysSurface returns true if eating appleCell would destroy the given surface.
-func destroysSurface(g *Game, appleCell, surfID int) bool {
-	ax, ay := g.XY(appleCell)
-	above := g.Idx(ax, ay-1)
-	if above < 0 || above >= g.NCells {
-		return false
-	}
-	return g.SurfAt[above] == surfID
 }
 
 // constNavigate finds the direction to navigate toward a constellation
@@ -236,147 +214,116 @@ func (d *Decision) phaseScoring() {
 	}
 
 	nClusters := len(g.Clusters)
-	if nClusters == 0 {
-		return
-	}
 
-	// Score all (snake, constellation) pairs
-	type assignment struct {
-		si    int // MySnakes slot
-		ci    int // cluster index
-		score int
-	}
-
-	var candidates []assignment
-	for si, snIdx := range d.MySnakes {
-		sn := &g.Sn[snIdx]
-		if !sn.Alive || sn.Len == 0 {
-			continue
-		}
-		for ci := range g.Clusters {
-			s := d.constScore(snIdx, &g.Clusters[ci])
-			candidates = append(candidates, assignment{si: si, ci: ci, score: s})
-		}
-	}
-
-	// Sort by score descending
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].score > candidates[j].score
-	})
-
-	// Greedy assignment: best score first, remove snake and cluster
-	usedSnake := make(map[int]bool, myN)
-	usedCluster := make(map[int]bool, nClusters)
-
-	// assignedCluster tracks which cluster each MySnakes slot got
+	// Constellation assignment for spreading bots
 	assignedCluster := make([]int, myN)
 	for i := range assignedCluster {
 		assignedCluster[i] = -1
 	}
 
-	for _, c := range candidates {
-		if usedSnake[c.si] || usedCluster[c.ci] {
-			continue
+	if nClusters > 0 {
+		type assignment struct {
+			si, ci, score int
 		}
-		usedSnake[c.si] = true
-		usedCluster[c.ci] = true
-		assignedCluster[c.si] = c.ci
-	}
-
-	// Free snakes (more snakes than clusters): assign best constellation ignoring taken
-	for si, snIdx := range d.MySnakes {
-		if usedSnake[si] {
-			continue
-		}
-		sn := &g.Sn[snIdx]
-		if !sn.Alive || sn.Len == 0 {
-			continue
-		}
-		bestCI := -1
-		bestScore := -1 << 30
-		for ci := range g.Clusters {
-			s := d.constScore(snIdx, &g.Clusters[ci])
-			if s > bestScore {
-				bestScore = s
-				bestCI = ci
+		var candidates []assignment
+		for si, snIdx := range d.MySnakes {
+			sn := &g.Sn[snIdx]
+			if !sn.Alive || sn.Len == 0 {
+				continue
+			}
+			for ci := range g.Clusters {
+				s := d.constScore(snIdx, &g.Clusters[ci])
+				candidates = append(candidates, assignment{si: si, ci: ci, score: s})
 			}
 		}
-		assignedCluster[si] = bestCI
-	}
-
-	// Build set of clusters taken by teammates (for apple exclusion)
-	teammateCluster := make(map[int]bool, myN)
-	for _, ci := range assignedCluster {
-		if ci >= 0 {
-			teammateCluster[ci] = true
+		sort.Slice(candidates, func(i, j int) bool {
+			return candidates[i].score > candidates[j].score
+		})
+		usedSnake := make(map[int]bool, myN)
+		usedCluster := make(map[int]bool, nClusters)
+		for _, c := range candidates {
+			if usedSnake[c.si] || usedCluster[c.ci] {
+				continue
+			}
+			usedSnake[c.si] = true
+			usedCluster[c.ci] = true
+			assignedCluster[c.si] = c.ci
+		}
+		for si, snIdx := range d.MySnakes {
+			if usedSnake[si] {
+				continue
+			}
+			sn := &g.Sn[snIdx]
+			if !sn.Alive || sn.Len == 0 {
+				continue
+			}
+			bestCI := -1
+			bestScore := -1 << 30
+			for ci := range g.Clusters {
+				s := d.constScore(snIdx, &g.Clusters[ci])
+				if s > bestScore {
+					bestScore = s
+					bestCI = ci
+				}
+			}
+			assignedCluster[si] = bestCI
 		}
 	}
 
-	// For each snake: pick apple target and direction
+	// For each snake: cluster apple first, fallback to any apple, then navigate
 	for si, snIdx := range d.MySnakes {
 		sn := &g.Sn[snIdx]
 		if !sn.Alive || sn.Len == 0 {
 			continue
 		}
 
+		reach := d.BFS.Reach[snIdx]
+		prevTarget := d.P.PrevAssign[si]
+
+		// 1. Cluster apple (sticky)
 		ci := assignedCluster[si]
-		if ci < 0 {
-			continue
-		}
-		cl := &g.Clusters[ci]
-
-		// 1. Try direct apple in own constellation
-		apple, dir, found := d.constBestApple(snIdx, cl)
-		if found {
-			d.Assigned[si] = apple
-			if dir >= 0 {
+		if ci >= 0 {
+			cl := &g.Clusters[ci]
+			apple, dir, found := d.constBestApple(snIdx, cl, prevTarget)
+			if found {
+				d.Assigned[si] = apple
 				d.AssignedDir[si] = dir
+				continue
+			}
+		}
+
+		// 2. Any closest apple
+		if len(reach) > 0 {
+			if prevTarget >= 0 {
+				for _, ri := range reach {
+					if ri.Apple == prevTarget {
+						d.Assigned[si] = ri.Apple
+						d.AssignedDir[si] = ri.FirstDir
+						break
+					}
+				}
+			}
+			if d.Assigned[si] < 0 {
+				d.Assigned[si] = reach[0].Apple
+				d.AssignedDir[si] = reach[0].FirstDir
 			}
 			continue
 		}
 
-		// 2. Find closest eatable apple NOT in a teammate's cluster
-		//    (own cluster already checked above — no reachable apple there)
-		//    Unassigned clusters and enemy-contested apples are ok.
-		apple, dir, found = d.findFreeApple(snIdx, si, assignedCluster, teammateCluster)
-		if found {
-			d.Assigned[si] = apple
+		// 3. Navigate toward cluster
+		if ci >= 0 {
+			dir := d.constNavigate(snIdx, &g.Clusters[ci])
 			if dir >= 0 {
 				d.AssignedDir[si] = dir
 			}
-			continue
 		}
+	}
 
-		// 3. Navigate via surface links toward constellation
-		dir = d.constNavigate(snIdx, cl)
-		if dir >= 0 {
-			d.AssignedDir[si] = dir
-		}
+	for si := range d.MySnakes {
+		d.P.PrevAssign[si] = d.Assigned[si]
 	}
 }
 
-// findFreeApple finds the closest reachable apple that is NOT in any
-// teammate's assigned cluster. The snake's own cluster is excluded from
-// the teammate set so it can eat from unassigned/enemy clusters.
-// Returns (apple cell, firstDir, found).
-func (d *Decision) findFreeApple(snIdx, si int, assignedCluster []int, teammateCluster map[int]bool) (int, int, bool) {
-	g := d.G
-	reach := d.BFS.Reach[snIdx]
-	myCI := assignedCluster[si]
-
-	for _, ri := range reach {
-		cid := -1
-		if ri.Apple >= 0 && ri.Apple < g.NCells {
-			cid = g.ClusterAt[ri.Apple]
-		}
-		// Skip apples in teammate's cluster (but not our own)
-		if cid >= 0 && cid != myCI && teammateCluster[cid] {
-			continue
-		}
-		return ri.Apple, ri.FirstDir, true
-	}
-	return -1, -1, false
-}
 
 func mobilityCount(g *Game, body []int) int {
 	if len(body) == 0 {

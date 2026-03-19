@@ -1,10 +1,12 @@
 package match
 
 import (
-	"errors"
+	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
+	"time"
 
 	engine "codingame/internal/engine"
 )
@@ -42,19 +44,22 @@ func NewRunner(options MatchOptions) *Runner {
 }
 
 type MatchResult struct {
-	ID             int
-	Seed           int64
-	Turns          int
-	Scores         [2]int
-	Losses         [2]int
-	SegmentsLost   [2]int
-	BotsLost       [2]int
-	Winner         int
-	LossReasons    [2]LossReason
-	BirdsPerPlayer int
-	MapWidth       int
-	MapHeight      int
-	Apples         int
+	ID                int
+	Seed              int64
+	Turns             int
+	Scores            [2]int
+	Losses            [2]int
+	SegmentsLost      [2]int
+	BotsLost          [2]int
+	Winner            int
+	LossReasons       [2]LossReason
+	TimeToFirstAnswer [2]time.Duration
+	TimeToTurnP99     [2]time.Duration
+	TimeToTurnMax     [2]time.Duration
+	BirdsPerPlayer    int
+	MapWidth          int
+	MapHeight         int
+	Apples            int
 }
 
 func (r MatchResult) SimulationID() int { return r.ID }
@@ -91,22 +96,69 @@ func (r MatchResult) Metrics() []Metric {
 		{Label: "segments_lost_p1", Value: float64(r.SegmentsLost[1])},
 		{Label: "bots_lost_p0", Value: float64(r.BotsLost[0])},
 		{Label: "bots_lost_p1", Value: float64(r.BotsLost[1])},
-		{Label: "losses_p0", Value: float64(r.Losses[0])},
-		{Label: "losses_p1", Value: float64(r.Losses[1])},
+		{Label: "time_to_first_answer_p0", Value: durationMillis(r.TimeToFirstAnswer[0])},
+		{Label: "time_to_first_answer_p1", Value: durationMillis(r.TimeToFirstAnswer[1])},
+		{Label: "time_to_turn_p99_p0", Value: durationMillis(r.TimeToTurnP99[0])},
+		{Label: "time_to_turn_p99_p1", Value: durationMillis(r.TimeToTurnP99[1])},
+		{Label: "time_to_turn_max_p0", Value: durationMillis(r.TimeToTurnMax[0])},
+		{Label: "time_to_turn_max_p1", Value: durationMillis(r.TimeToTurnMax[1])},
 	}
 }
 
 func (r MatchResult) RenderMatch() string {
-	return fmt.Sprintf(
-		`{"id":%d,"seed":%d,"turns":%d,"winner":%d,"loss_reason_p0":%q,"loss_reason_p1":%q,"score_p0":%d,"score_p1":%d,"segments_lost_p0":%d,"segments_lost_p1":%d,"bots_lost_p0":%d,"bots_lost_p1":%d,"losses_p0":%d,"losses_p1":%d,"birds_per_player":%d,"map_width":%d,"map_height":%d,"apples":%d}`,
-		r.ID, r.Seed, r.Turns, r.Winner,
-		r.LossReasons[0], r.LossReasons[1],
-		r.Scores[0], r.Scores[1],
-		r.SegmentsLost[0], r.SegmentsLost[1],
-		r.BotsLost[0], r.BotsLost[1],
-		r.Losses[0], r.Losses[1],
-		r.BirdsPerPlayer, r.MapWidth, r.MapHeight, r.Apples,
-	)
+	payload := struct {
+		ID                  int        `json:"id"`
+		Seed                int64      `json:"seed"`
+		Turns               int        `json:"turns"`
+		Winner              int        `json:"winner"`
+		LossReasonP0        LossReason `json:"loss_reason_p0"`
+		LossReasonP1        LossReason `json:"loss_reason_p1"`
+		ScoreP0             int        `json:"score_p0"`
+		ScoreP1             int        `json:"score_p1"`
+		SegmentsLostP0      int        `json:"segments_lost_p0"`
+		SegmentsLostP1      int        `json:"segments_lost_p1"`
+		BotsLostP0          int        `json:"bots_lost_p0"`
+		BotsLostP1          int        `json:"bots_lost_p1"`
+		TimeToFirstAnswerP0 float64    `json:"time_to_first_answer_p0"`
+		TimeToFirstAnswerP1 float64    `json:"time_to_first_answer_p1"`
+		TimeToTurnP99P0     float64    `json:"time_to_turn_p99_p0"`
+		TimeToTurnP99P1     float64    `json:"time_to_turn_p99_p1"`
+		TimeToTurnMaxP0     float64    `json:"time_to_turn_max_p0"`
+		TimeToTurnMaxP1     float64    `json:"time_to_turn_max_p1"`
+		BirdsPerPlayer      int        `json:"birds_per_player"`
+		MapWidth            int        `json:"map_width"`
+		MapHeight           int        `json:"map_height"`
+		Apples              int        `json:"apples"`
+	}{
+		ID:                  r.ID,
+		Seed:                r.Seed,
+		Turns:               r.Turns,
+		Winner:              r.Winner,
+		LossReasonP0:        r.LossReasons[0],
+		LossReasonP1:        r.LossReasons[1],
+		ScoreP0:             r.Scores[0],
+		ScoreP1:             r.Scores[1],
+		SegmentsLostP0:      r.SegmentsLost[0],
+		SegmentsLostP1:      r.SegmentsLost[1],
+		BotsLostP0:          r.BotsLost[0],
+		BotsLostP1:          r.BotsLost[1],
+		TimeToFirstAnswerP0: durationMillis(r.TimeToFirstAnswer[0]),
+		TimeToFirstAnswerP1: durationMillis(r.TimeToFirstAnswer[1]),
+		TimeToTurnP99P0:     durationMillis(r.TimeToTurnP99[0]),
+		TimeToTurnP99P1:     durationMillis(r.TimeToTurnP99[1]),
+		TimeToTurnMaxP0:     durationMillis(r.TimeToTurnMax[0]),
+		TimeToTurnMaxP1:     durationMillis(r.TimeToTurnMax[1]),
+		BirdsPerPlayer:      r.BirdsPerPlayer,
+		MapWidth:            r.MapWidth,
+		MapHeight:           r.MapHeight,
+		Apples:              r.Apples,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
 }
 
 func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
@@ -124,7 +176,7 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 		printDebugMap(seed, game)
 	}
 
-	cleanup, err := attachCommandPlayers(runner.Options, players)
+	controllers, cleanup, err := attachCommandPlayers(runner.Options, players)
 	if err != nil {
 		panic(err)
 	}
@@ -188,7 +240,7 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 	}
 	referee.OnEnd()
 
-	return buildMatchResult(simulationID, seed, turn, referee.Game, players)
+	return buildMatchResult(simulationID, seed, turn, referee.Game, players, controllers)
 }
 
 func handlePlayerCommands(players []*engine.Player, referee *engine.Referee) {
@@ -201,20 +253,13 @@ func handlePlayerCommands(players []*engine.Player, referee *engine.Referee) {
 			continue
 		}
 
-		var timeoutErr *timeoutError
-		if errors.As(err, &timeoutErr) {
-			player.Deactivate("Timeout!")
-			player.SetTimedOut(true)
-			continue
-		}
-
 		player.Deactivate(err.Error())
 	}
 
 	referee.ParsePlayerOutputs(players)
 }
 
-func attachCommandPlayers(options MatchOptions, players []*engine.Player) (func(), error) {
+func attachCommandPlayers(options MatchOptions, players []*engine.Player) ([]*commandPlayer, func(), error) {
 	controllers := make([]*commandPlayer, 0, len(players))
 	bins := []string{options.P0Bin, options.P1Bin}
 
@@ -224,7 +269,7 @@ func attachCommandPlayers(options MatchOptions, players []*engine.Player) (func(
 			for _, controller := range controllers {
 				_ = controller.Close()
 			}
-			return nil, fmt.Errorf("failed to start player %d session: %w", i, err)
+			return nil, nil, fmt.Errorf("failed to start player %d session: %w", i, err)
 		}
 		cp.playerIdx = i
 		cp.timing = options.Timing
@@ -232,14 +277,14 @@ func attachCommandPlayers(options MatchOptions, players []*engine.Player) (func(
 		controllers = append(controllers, cp)
 	}
 
-	return func() {
+	return controllers, func() {
 		for _, controller := range controllers {
 			_ = controller.Close()
 		}
 	}, nil
 }
 
-func buildMatchResult(simulationID int, seed int64, turns int, game *engine.Game, players []*engine.Player) MatchResult {
+func buildMatchResult(simulationID int, seed int64, turns int, game *engine.Game, players []*engine.Player, controllers []*commandPlayer) MatchResult {
 	winner := -1
 	if players[0].GetScore() > players[1].GetScore() {
 		winner = 0
@@ -257,21 +302,42 @@ func buildMatchResult(simulationID int, seed int64, turns int, game *engine.Game
 		botsLost[i] = len(player.GetBirds()) - liveBirdCount(player)
 	}
 
-	return MatchResult{
-		ID:             simulationID,
-		Seed:           seed,
-		Turns:          turns,
-		Scores:         [2]int{players[0].GetScore(), players[1].GetScore()},
-		Losses:         game.Losses,
-		SegmentsLost:   game.Losses,
-		BotsLost:       botsLost,
-		Winner:         winner,
-		LossReasons:    [2]LossReason{lossReasonFor(players[0], winner, 0), lossReasonFor(players[1], winner, 1)},
-		BirdsPerPlayer: birdsPerPlayer,
-		MapWidth:       game.Grid.Width,
-		MapHeight:      game.Grid.Height,
-		Apples:         len(game.Grid.Apples),
+	firstAnswer := [2]time.Duration{}
+	turnP99 := [2]time.Duration{}
+	turnMax := [2]time.Duration{}
+	for i, controller := range controllers {
+		stats := controller.TimingStats()
+		firstAnswer[i] = stats.FirstAnswer
+		turnP99[i] = stats.TurnP99
+		turnMax[i] = stats.TurnMax
 	}
+
+	return MatchResult{
+		ID:                simulationID,
+		Seed:              seed,
+		Turns:             turns,
+		Scores:            [2]int{players[0].GetScore(), players[1].GetScore()},
+		Losses:            game.Losses,
+		SegmentsLost:      game.Losses,
+		BotsLost:          botsLost,
+		Winner:            winner,
+		LossReasons:       [2]LossReason{lossReasonFor(players[0], winner, 0), lossReasonFor(players[1], winner, 1)},
+		TimeToFirstAnswer: firstAnswer,
+		TimeToTurnP99:     turnP99,
+		TimeToTurnMax:     turnMax,
+		BirdsPerPlayer:    birdsPerPlayer,
+		MapWidth:          game.Grid.Width,
+		MapHeight:         game.Grid.Height,
+		Apples:            len(game.Grid.Apples),
+	}
+}
+
+func durationMillis(value time.Duration) float64 {
+	return round2(float64(value) / float64(time.Millisecond))
+}
+
+func round2(value float64) float64 {
+	return math.Round(value*100) / 100
 }
 
 func lossMetric(actual, expected LossReason) float64 {

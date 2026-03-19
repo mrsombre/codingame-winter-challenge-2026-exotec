@@ -19,7 +19,7 @@ var dbgSeed int64 = -721452932309119600
 var dbgTurnLines []string = nil
 
 // dbgSnakeID: which snake to trace in BFS detail. -1 = all my snakes.
-var dbgSnakeID = 3
+var dbgSnakeID = 0
 
 // ----- Replay folder loader -----
 

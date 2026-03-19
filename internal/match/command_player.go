@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -13,29 +14,26 @@ import (
 	engine "codingame/internal/engine"
 )
 
-const (
-	initialTurnTimeout = time.Second
-	turnTimeout        = 50 * time.Millisecond
-)
-
-type timeoutError struct{}
-
-func (e *timeoutError) Error() string {
-	return "timeout"
+type playerTimingStats struct {
+	FirstAnswer time.Duration
+	TurnP99     time.Duration
+	TurnMax     time.Duration
 }
 
 type commandPlayer struct {
-	player       *engine.Player
-	path         string
-	cmd          *exec.Cmd
-	stdin        io.WriteCloser
-	stdout       *bufio.Reader
-	stderrDone   chan struct{}
-	turns        int
-	writeMu      sync.Mutex
-	timing       bool
-	playerIdx    int
-	lastDuration time.Duration
+	player                *engine.Player
+	path                  string
+	cmd                   *exec.Cmd
+	stdin                 io.WriteCloser
+	stdout                *bufio.Reader
+	stderrDone            chan struct{}
+	turns                 int
+	writeMu               sync.Mutex
+	timing                bool
+	playerIdx             int
+	lastDuration          time.Duration
+	firstResponseDuration time.Duration
+	turnResponseDurations []time.Duration
 }
 
 func newCommandPlayer(player *engine.Player, path string) (*commandPlayer, error) {
@@ -100,43 +98,51 @@ func (cp *commandPlayer) Execute() error {
 }
 
 func (cp *commandPlayer) readCommandLine() (string, error) {
-	timeout := turnTimeout
-	if cp.turns == 0 {
-		timeout = initialTurnTimeout
-	}
-
-	type readResult struct {
-		line string
-		err  error
-	}
-
-	resultCh := make(chan readResult, 1)
 	start := time.Now()
-	go func() {
-		line, err := cp.stdout.ReadString('\n')
-		resultCh <- readResult{line: line, err: err}
-	}()
-
-	select {
-	case result := <-resultCh:
-		cp.lastDuration = time.Since(start)
-		if cp.timing {
-			fmt.Fprintf(os.Stderr, "timing p%d turn %d: %s\n", cp.playerIdx, cp.turns, cp.lastDuration)
-		}
-		if result.err != nil {
-			return "", fmt.Errorf("external player read failed (%s): %w", cp.path, result.err)
-		}
-		return result.line, nil
-	case <-time.After(timeout):
-		cp.lastDuration = time.Since(start)
-		if cp.timing {
-			fmt.Fprintf(os.Stderr, "timing p%d turn %d: TIMEOUT after %s\n", cp.playerIdx, cp.turns, cp.lastDuration)
-		}
-		if cp.cmd != nil && cp.cmd.Process != nil {
-			_ = cp.cmd.Process.Kill()
-		}
-		return "", &timeoutError{}
+	line, err := cp.stdout.ReadString('\n')
+	cp.lastDuration = time.Since(start)
+	cp.recordResponseDuration(cp.lastDuration)
+	if cp.timing {
+		fmt.Fprintf(os.Stderr, "timing p%d turn %d: %s\n", cp.playerIdx, cp.turns, cp.lastDuration)
 	}
+	if err != nil {
+		return "", fmt.Errorf("external player read failed (%s): %w", cp.path, err)
+	}
+	return line, nil
+}
+
+func (cp *commandPlayer) recordResponseDuration(duration time.Duration) {
+	if cp.turns == 0 {
+		cp.firstResponseDuration = duration
+		return
+	}
+	cp.turnResponseDurations = append(cp.turnResponseDurations, duration)
+}
+
+func (cp *commandPlayer) TimingStats() playerTimingStats {
+	p99, max := summarizeDurations(cp.turnResponseDurations)
+	return playerTimingStats{
+		FirstAnswer: cp.firstResponseDuration,
+		TurnP99:     p99,
+		TurnMax:     max,
+	}
+}
+
+func summarizeDurations(durations []time.Duration) (time.Duration, time.Duration) {
+	if len(durations) == 0 {
+		return 0, 0
+	}
+
+	sorted := append([]time.Duration(nil), durations...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i] < sorted[j]
+	})
+
+	idx := (99*len(sorted)+99)/100 - 1
+	if idx < 0 {
+		idx = 0
+	}
+	return sorted[idx], sorted[len(sorted)-1]
 }
 
 func (cp *commandPlayer) Close() error {

@@ -27,7 +27,7 @@ Arena throughput with 4 alive bots (full game): **~23 gens × 40 sims = ~920 sim
 
 - **No parallelism** — goroutines and `GOMAXPROCS>1` are wasted overhead.
 - **256 MB RAM** — avoid large heap allocations per turn; prefer stack-allocated arrays over `map[Point]int`.
-- **2.7× slower than M4** — always benchmark with `GOMAXPROCS=1`; the Makefile exports it.
+- **2.7× slower than M4** — always benchmark with `GOMAXPROCS=1`; the `Taskfile.yml` exports it.
 - **23 gens is low** — with 4 bots alive, the GA has little time to converge. Consider reducing `MaxDepth` or `PopSize` during the full-game phase.
 
 ## Turn Budget

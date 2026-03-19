@@ -2,12 +2,13 @@ package match
 
 import (
 	"sort"
+	"strings"
 )
 
 type MetricSummary struct {
-	Label string  `json:"label"`
-	Total float64 `json:"total"`
-	Avg   float64 `json:"avg"`
+	Label string   `json:"label"`
+	Total *float64 `json:"total,omitempty"`
+	Avg   float64  `json:"avg"`
 }
 
 type MatchSummary struct {
@@ -39,10 +40,13 @@ func SummarizeMatches(results []MatchResult) MatchSummary {
 
 	metrics := make([]MetricSummary, len(firstMetrics))
 	for i, metric := range firstMetrics {
+		total := round2(totals[i])
 		metrics[i] = MetricSummary{
 			Label: metric.Label,
-			Total: totals[i],
-			Avg:   totals[i] / float64(len(results)),
+			Avg:   round2(totals[i] / float64(len(results))),
+		}
+		if !isTimingMetric(metric.Label) {
+			metrics[i].Total = &total
 		}
 	}
 
@@ -50,6 +54,10 @@ func SummarizeMatches(results []MatchResult) MatchSummary {
 		Simulations: len(results),
 		Metrics:     metrics,
 	}
+}
+
+func isTimingMetric(label string) bool {
+	return strings.HasPrefix(label, "time_to_")
 }
 
 func FindWorstLosses(results []MatchResult, limit int) []int {

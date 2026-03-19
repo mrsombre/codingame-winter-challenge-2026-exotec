@@ -461,9 +461,6 @@ func surfGraphReach(g *Game, entries []SurfReach, snLen int, headCell int, snake
 			if !appleAlive[al.Apple] {
 				continue
 			}
-			if snLen < al.Len {
-				continue
-			}
 			fd := dirForTarget(entry, al.Apple)
 			addApple(ReachInfo{
 				Apple:    al.Apple,
@@ -539,9 +536,6 @@ func surfGraphReach(g *Game, entries []SurfReach, snLen int, headCell int, snake
 				continue
 			}
 			if !appleAlive[al.Apple] {
-				continue
-			}
-			if snLen < al.Len {
 				continue
 			}
 			fd := cur.firstDir

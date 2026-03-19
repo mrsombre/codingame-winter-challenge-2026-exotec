@@ -24,50 +24,50 @@ internal/
 
 ## Building and Testing
 
-ALWAYS use `make` targets. NEVER run `go build` or `go run ./cmd/match` directly.
+ALWAYS use `task` tasks. NEVER run `go build` or `go run ./cmd/match` directly.
 
 ```shell
 # Run tests
-make test
+task test
 
 # Build a bot binary into ./bin/<name>
-make build-agent LOGIC=basic
+task build-agent LOGIC=basic
 
 # Build the baseline opponent into ./bin/opponent
-make build-opponent
+task build-opponent
 ```
 
 ## Running Matches
 
-ALWAYS use `make match` or `make match-bin`. Default: 30 simulations, 5 parallel, 100 max turns.
+ALWAYS use `task match` or `task match-bin`. Default: 30 simulations, 5 parallel, 100 max turns.
 
 ```shell
 # Build + run: basic vs opponent (30 matches, 5 parallel)
-make match LOGIC=basic
+task match LOGIC=basic
 
 # Override match count
-make match LOGIC=basic ENGINE_ARGS="--simulations 50 --parallel 5 --seed 50"
+task match LOGIC=basic ENGINE_ARGS="--simulations 50 --parallel 5 --seed 50"
 
 # Run two pre-built binaries against each other
-make match-bin P0=basic P1=opponent
+task match-bin P0=basic P1=opponent
 ```
 
 ## Replay And Debug Viewer
 
-Use `make replay` to regenerate debug data and `make debug` to launch the frontend viewer. The replay/debug flow is driven by tests in `agent/<logic>/src`, not by the normal match runner output format.
+Use `task replay` to regenerate debug data and `task debug` to launch the frontend viewer. The replay/debug flow is driven by tests in `agent/<logic>/src`, not by the normal match runner output format.
 
 ```shell
 # Regenerate debug JSON in ./debug/public
-make replay LOGIC=basic
+task replay LOGIC=basic
 
 # Capture one deterministic debug trace from the local match runner
 mkdir -p replay
 printf 'seed=50\n' > replay/seed.txt
-make match LOGIC=basic ENGINE_ARGS="--debug --seed 50" 2> replay/replay.txt
+task match LOGIC=basic ENGINE_ARGS="--debug --seed 50" 2> replay/replay.txt
 ```
 
 Core ideas:
 
 - The frontend is a Vite app in `./debug`; it serves files from `./debug/public` and currently fetches `/map.json`
 - Replay input is loaded from `./replay/seed.txt` and `./replay/replay.txt` when those files exist; otherwise the tests fall back to `dbgSeed` and `dbgTurnLines` in `agent/<logic>/src/decision_test.go`
-- `replay/replay.txt` can contain the full `--debug` stderr log from `make match`; the loader keeps only lines that start with digits, which are the turn input lines
+- `replay/replay.txt` can contain the full `--debug` stderr log from `task match`; the loader keeps only lines that start with digits, which are the turn input lines
