@@ -68,11 +68,30 @@ func (d *Decision) executeRoutes() {
 		}
 
 		route := &p.Routes[si]
+		reach := d.BFS.Reach[snIdx]
 
 		if route.Valid && route.StepCursor < len(route.Steps) {
+			// Count steps until next apple in route.
+			stepsToRouteApple := 0
+			for k := route.StepCursor; k < len(route.Steps); k++ {
+				stepsToRouteApple++
+				if route.Steps[k].Apple >= 0 {
+					break
+				}
+			}
+
+			// If greedy BFS finds a closer apple than the route's
+			// next target, override the route. This prevents bots from
+			// walking past nearby apples to reach a distant planned target.
+			if len(reach) > 0 && reach[0].Dist < stepsToRouteApple {
+				d.Assigned[si] = reach[0].Apple
+				d.AssignedDir[si] = reach[0].FirstDir
+				route.Valid = false
+				continue
+			}
+
 			step := route.Steps[route.StepCursor]
 			d.AssignedDir[si] = step.Dir
-			// Set Assigned to the next uncollected apple in the sequence.
 			d.Assigned[si] = nextRouteApple(route)
 			route.StepCursor++
 		} else {
@@ -233,7 +252,7 @@ func (d *Decision) planAllRoutes() {
 	enemyWillEat := make(map[int]bool)
 	for a := 0; a < g.ANum; a++ {
 		inf := &d.Influence[a]
-		if inf.Heat <= -2 && inf.OpBest >= 0 {
+		if inf.Heat <= -5 && inf.OpBest >= 0 {
 			enemyWillEat[g.Ap[a]] = true
 		}
 	}
@@ -315,7 +334,7 @@ func (d *Decision) planAllRoutes() {
 			}
 			// Score each apple: lower = better.
 			// dist is base cost. Negative heat (enemy closer) adds penalty.
-			// Positive heat (we're closer) gives small bonus.
+			// Positive heat (we're closer) gives bonus.
 			bestScore := 1 << 30
 			bestIdx := 0
 			for i, t := range targets {
@@ -328,9 +347,9 @@ func (d *Decision) planAllRoutes() {
 					}
 				}
 				if heat < 0 {
-					score += (-heat) * 15 // heavy penalty for enemy-favored
+					score += (-heat) * 5 // mild penalty for enemy-favored
 				} else if heat > 0 {
-					score -= heat * 3 // small bonus for our advantage
+					score -= heat * 5 // bonus for our advantage
 				}
 				if score < bestScore {
 					bestScore = score
