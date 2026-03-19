@@ -1,18 +1,13 @@
 package main
 
-import "sort"
-
 // --- Phase: Partition (replaces phaseScoring + phaseAssignment) ---
 // Turn 1: sequential body-sim route planning for all bots.
 // Later turns: validate plan, follow it, fall back to greedy when broken.
 
 const (
-	routeMaxDepth    = 5  // max apples per bot in initial sim plan
+	routeMaxDepth    = 8  // max apples per bot in initial sim plan
 	routeMaxSteps    = 40 // max steps per bot route (safety cap)
-	routeReplayDepth = 25 // max BFS depth in replayPath
-
-	greedyK     = 5  // K nearest neighbors for density scoring
-	greedyAlpha = 60 // density weight (percent of dist unit)
+	routeReplayDepth = 15 // max BFS depth in replayPath
 )
 
 // phasePartition is the main dispatcher.
@@ -32,7 +27,7 @@ func (d *Decision) phasePartition() {
 
 // --- Greedy fallback ---
 
-// greedyFallback assigns a target apple for snake slot si using density-aware greedy.
+// greedyFallback assigns the closest reachable apple not claimed by other routes.
 func (d *Decision) greedyFallback(si, snIdx int) {
 	g := d.G
 	p := d.P
@@ -44,62 +39,19 @@ func (d *Decision) greedyFallback(si, snIdx int) {
 		return
 	}
 
-	// Filter out apples claimed by other valid routes.
-	var candidates []ReachInfo
+	// Pick closest apple not claimed by other valid routes.
 	for _, ri := range reach {
 		if ri.Apple >= 0 && ri.Apple < len(p.PlannedApples) && p.PlannedApples[ri.Apple] {
 			continue
 		}
-		candidates = append(candidates, ri)
-	}
-	if len(candidates) == 0 {
-		candidates = reach // all claimed; ignore exclusion
-	}
-
-	bestScore := -1 << 30
-	bestIdx := 0
-
-	for i, ri := range candidates {
-		score := -ri.Dist * 100
-
-		// Density bonus: prefer apples with nearby neighbors.
-		score += densityBonus(g, ri.Apple, candidates)
-
-		// Heat bonus: prefer apples where we have advantage.
-		if ri.Apple >= 0 && ri.Apple < MaxExpandedCells {
-			heat := d.HeatByCell[ri.Apple]
-			if heat > 0 {
-				score += heat * 10
-			}
-		}
-
-		if score > bestScore {
-			bestScore = score
-			bestIdx = i
-		}
+		d.Assigned[si] = ri.Apple
+		d.AssignedDir[si] = ri.FirstDir
+		return
 	}
 
-	d.Assigned[si] = candidates[bestIdx].Apple
-	d.AssignedDir[si] = candidates[bestIdx].FirstDir
-}
-
-// densityBonus returns a score bonus based on how many other reachable apples
-// are close to the given apple. Prefers picking apples in dense areas.
-func densityBonus(g *Game, apple int, candidates []ReachInfo) int {
-	dists := make([]int, 0, len(candidates))
-	for _, ri := range candidates {
-		if ri.Apple == apple {
-			continue
-		}
-		dists = append(dists, g.Manhattan(apple, ri.Apple))
-	}
-	sort.Ints(dists)
-
-	bonus := 0
-	for i := 0; i < greedyK && i < len(dists); i++ {
-		bonus -= dists[i] * greedyAlpha / 100
-	}
-	return bonus
+	// All claimed — just pick absolute closest.
+	d.Assigned[si] = reach[0].Apple
+	d.AssignedDir[si] = reach[0].FirstDir
 }
 
 // --- Plan execution ---
@@ -263,8 +215,10 @@ func (d *Decision) rebuildPlannedApples() {
 
 // --- Route planning (turn 1) ---
 
-// planAllRoutes runs sequential body-sim route planning for all my bots.
-// Tries all bot orderings and keeps the one that claims the most apples.
+// planAllRoutes assigns apples using iterative Voronoi simulation.
+// Each round: all bots BFS to find their closest apple → Voronoi tiebreak
+// (closest wins) → winner simulates eating (body grows, gravity) →
+// apple removed → repeat with updated state.
 func (d *Decision) planAllRoutes() {
 	g := d.G
 	myN := len(d.MySnakes)
@@ -272,59 +226,254 @@ func (d *Decision) planAllRoutes() {
 		return
 	}
 
-	// Build available apple list.
-	avail := make([]int, g.ANum)
-	copy(avail, g.Ap[:g.ANum])
-
-	sim := NewSim(g)
-
-	// Try all permutations of bot ordering; keep best total.
-	perms := permutations(myN)
-	bestTotal := -1
-	var bestRoutes [MaxPSn]BotRoute
-
-	for _, perm := range perms {
-		// Fresh apple set for this permutation.
-		curAvail := make([]int, len(avail))
-		copy(curAvail, avail)
-
-		var routes [MaxPSn]BotRoute
-		total := 0
-
-		for _, si := range perm {
-			snIdx := d.MySnakes[si]
-			sn := &g.Sn[snIdx]
-			if !sn.Alive || sn.Len == 0 {
-				continue
-			}
-
-			route := &routes[si]
-			route.SnIdx = snIdx
-			route.Valid = true
-			route.StepCursor = 0
-
-			d.simRouteForBot(sim, sn, route, curAvail)
-
-			// Remove claimed apples from available set.
-			for _, ap := range route.AppleSeq {
-				for j := 0; j < len(curAvail); j++ {
-					if curAvail[j] == ap {
-						curAvail[j] = curAvail[len(curAvail)-1]
-						curAvail = curAvail[:len(curAvail)-1]
-						break
-					}
-				}
-			}
-			total += len(route.AppleSeq)
-		}
-
-		if total > bestTotal {
-			bestTotal = total
-			bestRoutes = routes
+	// Predict which apples the enemy will likely eat.
+	// An apple is "enemy-certain" if the closest enemy reaches it
+	// strictly faster than ANY of our bots (heat < 0 from influence).
+	// Only remove apples with significant enemy advantage (heat <= -2).
+	enemyWillEat := make(map[int]bool)
+	for a := 0; a < g.ANum; a++ {
+		inf := &d.Influence[a]
+		if inf.Heat <= -2 && inf.OpBest >= 0 {
+			enemyWillEat[g.Ap[a]] = true
 		}
 	}
 
-	d.P.Routes = bestRoutes
+	avail := make([]int, 0, g.ANum)
+	for i := 0; i < g.ANum; i++ {
+		if !enemyWillEat[g.Ap[i]] {
+			avail = append(avail, g.Ap[i])
+		}
+	}
+	sim := NewSim(g)
+
+	// Per-bot simulated state: body evolves as apples are "eaten".
+	type botState struct {
+		body    []int
+		dir     int
+		turnNum int
+		alive   bool
+	}
+	states := make([]botState, myN)
+	for si, snIdx := range d.MySnakes {
+		sn := &g.Sn[snIdx]
+		states[si] = botState{
+			body:  append([]int(nil), sn.Body[:sn.Len]...),
+			dir:   sn.Dir,
+			alive: sn.Alive && sn.Len > 0,
+		}
+	}
+
+	// Init routes.
+	for si, snIdx := range d.MySnakes {
+		r := &d.P.Routes[si]
+		r.SnIdx = snIdx
+		r.Valid = true
+		r.StepCursor = 0
+		r.AppleSeq = r.AppleSeq[:0]
+		r.Steps = r.Steps[:0]
+	}
+
+	// Iterative assignment: one apple per bot per round.
+	for round := 0; round < routeMaxDepth; round++ {
+		if len(avail) == 0 {
+			break
+		}
+
+		sim.rebuildAppleMapFrom(avail)
+
+		// Each alive bot finds its closest reachable apple.
+		type candidate struct {
+			si    int
+			apple int
+			dist  int
+			target SimTarget
+		}
+		var candidates []candidate
+
+		for si, snIdx := range d.MySnakes {
+			if !states[si].alive {
+				continue
+			}
+			// Bot has enough apples — freeze it, leave apples for others.
+			// Use lower threshold than routeMaxDepth so greedy bots don't hoard.
+			if len(d.P.Routes[si].AppleSeq) >= 4 {
+				continue
+			}
+			sn := &g.Sn[snIdx]
+			tmpSn := &Snake{
+				ID:    sn.ID,
+				Owner: sn.Owner,
+				Body:  states[si].body,
+				Len:   len(states[si].body),
+				Dir:   states[si].dir,
+				Alive: true,
+			}
+
+			targets := sim.SimBFSApples(tmpSn)
+			if len(targets) == 0 {
+				continue
+			}
+			// Score each apple: lower = better.
+			// dist is base cost. Negative heat (enemy closer) adds penalty.
+			// Positive heat (we're closer) gives small bonus.
+			bestScore := 1 << 30
+			bestIdx := 0
+			for i, t := range targets {
+				score := t.Dist * 10
+				heat := 0
+				if t.Apple >= 0 && t.Apple < MaxExpandedCells {
+					h := d.HeatByCell[t.Apple]
+					if h != heatUnreachable && h != heatExclusive {
+						heat = h
+					}
+				}
+				if heat < 0 {
+					score += (-heat) * 15 // heavy penalty for enemy-favored
+				} else if heat > 0 {
+					score -= heat * 3 // small bonus for our advantage
+				}
+				if score < bestScore {
+					bestScore = score
+					bestIdx = i
+				}
+			}
+			best := targets[bestIdx]
+			candidates = append(candidates, candidate{si: si, apple: best.Apple, dist: best.Dist, target: best})
+		}
+
+		if len(candidates) == 0 {
+			break
+		}
+
+		// Voronoi: for each apple, give to the bot with shortest dist.
+		// Group by apple, pick winner.
+		assigned := make(map[int]candidate) // apple → winning candidate
+		for _, c := range candidates {
+			if prev, ok := assigned[c.apple]; !ok || c.dist < prev.dist {
+				assigned[c.apple] = c
+			}
+		}
+
+		// Winners: simulate eating, record route steps.
+		// Losers: skip this round (will try again next round with updated state).
+		winners := make(map[int]bool) // bot slot → assigned this round
+		for _, winner := range assigned {
+			si := winner.si
+			if winners[si] {
+				continue // bot already won an apple this round
+			}
+			winners[si] = true
+
+			sn := &g.Sn[d.MySnakes[si]]
+			route := &d.P.Routes[si]
+
+			// Rebuild obstacle map for this bot before replay.
+			sim.buildObstacleMap(sn.ID)
+			// Replay path to record steps.
+			steps, finalBody := d.replayPath(sim, states[si].body, states[si].dir,
+				winner.apple, states[si].turnNum, avail)
+			if steps == nil {
+				continue // unreachable after all
+			}
+
+			route.AppleSeq = append(route.AppleSeq, winner.apple)
+			route.Steps = append(route.Steps, steps...)
+			states[si].turnNum += len(steps)
+			states[si].body = finalBody
+			if len(finalBody) >= 2 {
+				states[si].dir = g.DirFromTo(finalBody[1], finalBody[0])
+			}
+			_ = sn
+
+			// Remove apple from avail.
+			for j := 0; j < len(avail); j++ {
+				if avail[j] == winner.apple {
+					avail[j] = avail[len(avail)-1]
+					avail = avail[:len(avail)-1]
+					break
+				}
+			}
+		}
+
+		if len(winners) == 0 {
+			break // no progress
+		}
+	}
+
+	// Sequential fill: bots with < routeMaxDepth apples get more from remaining pool.
+	// Process bots by fewest apples first (most hungry first).
+	for fill := 0; fill < routeMaxDepth; fill++ {
+		if len(avail) == 0 {
+			break
+		}
+		progress := false
+		for si, snIdx := range d.MySnakes {
+			if len(d.P.Routes[si].AppleSeq) >= routeMaxDepth {
+				continue
+			}
+			if !states[si].alive {
+				continue
+			}
+			sn := &g.Sn[snIdx]
+
+			sim.rebuildAppleMapFrom(avail)
+			sim.buildObstacleMap(sn.ID)
+
+			tmpSn := &Snake{
+				ID:    sn.ID,
+				Owner: sn.Owner,
+				Body:  states[si].body,
+				Len:   len(states[si].body),
+				Dir:   states[si].dir,
+				Alive: true,
+			}
+
+			targets := sim.SimBFSApples(tmpSn)
+			if len(targets) == 0 {
+				continue
+			}
+
+			best := targets[0]
+			for _, t := range targets[1:] {
+				if t.Dist < best.Dist {
+					best = t
+				}
+			}
+
+			steps, finalBody := d.replayPath(sim, states[si].body, states[si].dir,
+				best.Apple, states[si].turnNum, avail)
+			if steps == nil {
+				continue
+			}
+
+			route := &d.P.Routes[si]
+			route.AppleSeq = append(route.AppleSeq, best.Apple)
+			route.Steps = append(route.Steps, steps...)
+			states[si].turnNum += len(steps)
+			states[si].body = finalBody
+			if len(finalBody) >= 2 {
+				states[si].dir = g.DirFromTo(finalBody[1], finalBody[0])
+			}
+
+			for j := 0; j < len(avail); j++ {
+				if avail[j] == best.Apple {
+					avail[j] = avail[len(avail)-1]
+					avail = avail[:len(avail)-1]
+					break
+				}
+			}
+			progress = true
+		}
+		if !progress {
+			break
+		}
+	}
+
+	for si := range d.MySnakes {
+		if len(d.P.Routes[si].AppleSeq) == 0 {
+			d.P.Routes[si].Valid = false
+		}
+	}
 }
 
 // simRouteForBot plans a route for one bot through up to routeMaxDepth apples.
@@ -361,7 +510,7 @@ func (d *Decision) simRouteForBot(sim *Sim, sn *Snake, route *BotRoute, avail []
 			break
 		}
 
-		// Filter out already-claimed apples from targets.
+		// Filter out already-claimed apples.
 		var filtered []SimTarget
 		for _, t := range targets {
 			dup := false
@@ -379,8 +528,8 @@ func (d *Decision) simRouteForBot(sim *Sim, sn *Snake, route *BotRoute, avail []
 			break
 		}
 
-		// Pick best target using density scoring.
-		best := d.pickBestTarget(filtered, avail)
+		// Pick closest apple — guaranteed points beat speculative plans.
+		best := d.pickBestTarget(filtered)
 
 		// Replay path from current body to this apple.
 		steps, finalBody := d.replayPath(sim, curBody, curDir, best.Apple, turnNum, avail)
@@ -412,32 +561,15 @@ func (d *Decision) simRouteForBot(sim *Sim, sn *Snake, route *BotRoute, avail []
 	}
 }
 
-// pickBestTarget scores SimTargets with density awareness.
-func (d *Decision) pickBestTarget(targets []SimTarget, avail []int) SimTarget {
-	g := d.G
-	bestScore := -1 << 30
-	bestIdx := 0
-
+// pickBestTarget picks the closest reachable apple. Always closest first.
+func (d *Decision) pickBestTarget(targets []SimTarget) SimTarget {
+	best := 0
 	for i, t := range targets {
-		score := -t.Dist * 100
-
-		// Density: count how many available apples are near this target.
-		for _, ap := range avail {
-			if ap == t.Apple {
-				continue
-			}
-			md := g.Manhattan(t.Apple, ap)
-			if md <= greedyK {
-				score += (greedyK - md) * greedyAlpha / 100
-			}
-		}
-
-		if score > bestScore {
-			bestScore = score
-			bestIdx = i
+		if t.Dist < targets[best].Dist {
+			best = i
 		}
 	}
-	return targets[bestIdx]
+	return targets[best]
 }
 
 // replayPath does body-sim BFS from startBody to targetApple, recording
@@ -471,7 +603,9 @@ func (d *Decision) replayPath(
 		prevDir: startDir,
 	}}
 
-	for qi := 0; qi < len(queue); qi++ {
+	const replayMaxNodes = 2000 // cap BFS to prevent timeout with long bodies
+
+	for qi := 0; qi < len(queue) && qi < replayMaxNodes; qi++ {
 		cur := queue[qi]
 		if cur.dist >= routeReplayDepth {
 			continue

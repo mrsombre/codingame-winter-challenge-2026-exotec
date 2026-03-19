@@ -105,7 +105,7 @@ function layerClusters(key, { snakeMap, clusterMap, clusterData }) {
 const routeColors = [
   { bg: 'rgba(168,85,247,0.25)', dot: 'bg-purple-400', border: 'border-purple-500', text: 'text-purple-400', apple: 'rgba(168,85,247,0.5)' },
   { bg: 'rgba(59,130,246,0.25)', dot: 'bg-blue-400', border: 'border-blue-500', text: 'text-blue-400', apple: 'rgba(59,130,246,0.5)' },
-  { bg: 'rgba(234,179,8,0.25)', dot: 'bg-yellow-400', border: 'border-yellow-500', text: 'text-yellow-400', apple: 'rgba(234,179,8,0.5)' },
+  { bg: 'rgba(244,63,94,0.25)', dot: 'bg-rose-400', border: 'border-rose-500', text: 'text-rose-400', apple: 'rgba(244,63,94,0.5)' },
   { bg: 'rgba(34,197,94,0.25)', dot: 'bg-green-400', border: 'border-green-500', text: 'text-green-400', apple: 'rgba(34,197,94,0.5)' },
 ]
 
@@ -438,7 +438,7 @@ export default function App() {
           {showRoutes && <>
             <div className="flex items-center gap-1"><div className="w-3 h-3 bg-purple-400 rounded-full" /> bot 0 path</div>
             <div className="flex items-center gap-1"><div className="w-3 h-3 bg-blue-400 rounded-full" /> bot 1 path</div>
-            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-yellow-400 rounded-full" /> bot 2 path</div>
+            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-rose-400 rounded-full" /> bot 2 path</div>
             <div className="flex items-center gap-1"><div className="w-3 h-3 border-2 border-purple-500" /> target apple (numbered)</div>
           </>}
           {showSurfaces && <>

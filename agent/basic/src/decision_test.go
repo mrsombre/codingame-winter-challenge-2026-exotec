@@ -275,6 +275,61 @@ func cellStr(g *Game, cell int) string {
 	return fmt.Sprintf("(%d,%d)", x, y)
 }
 
+// ----- Permutation debug -----
+
+func TestDbgPermutations(t *testing.T) {
+	g := dbgGame()
+	p := &Plan{G: g}
+	p.Init()
+	d := &Decision{G: g, P: p}
+	d.phaseBFS()
+	d.phaseInfluence()
+
+	myN := len(d.MySnakes)
+	avail := make([]int, g.ANum)
+	copy(avail, g.Ap[:g.ANum])
+	sim := NewSim(g)
+
+	perms := permutations(myN)
+	for pi, perm := range perms {
+		curAvail := make([]int, len(avail))
+		copy(curAvail, avail)
+
+		totalApples, totalSteps := 0, 0
+		var detail []string
+		for _, si := range perm {
+			snIdx := d.MySnakes[si]
+			sn := &g.Sn[snIdx]
+			if !sn.Alive || sn.Len == 0 {
+				continue
+			}
+			route := &BotRoute{SnIdx: snIdx, Valid: true}
+			d.simRouteForBot(sim, sn, route, curAvail)
+			for _, ap := range route.AppleSeq {
+				for j := 0; j < len(curAvail); j++ {
+					if curAvail[j] == ap {
+						curAvail[j] = curAvail[len(curAvail)-1]
+						curAvail = curAvail[:len(curAvail)-1]
+						break
+					}
+				}
+			}
+			var apStr string
+			for _, ap := range route.AppleSeq {
+				ax, ay := g.XY(ap)
+				apStr += fmt.Sprintf("(%d,%d) ", ax, ay)
+			}
+			detail = append(detail, fmt.Sprintf("sn%d: %d apples %d steps [%s]", sn.ID, len(route.AppleSeq), len(route.Steps), apStr))
+			totalApples += len(route.AppleSeq)
+			totalSteps += len(route.Steps)
+		}
+		t.Logf("perm[%d] %v → %d apples, %d steps", pi, perm, totalApples, totalSteps)
+		for _, d := range detail {
+			t.Logf("  %s", d)
+		}
+	}
+}
+
 // ----- Regression tests -----
 
 func TestDebugSeed1074_Crash(t *testing.T) {

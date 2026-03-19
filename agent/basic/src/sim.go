@@ -363,8 +363,8 @@ func (s *Sim) applyGravity(body []int) bool {
 
 const (
 	simMaxEatDepth     = 2  // apple eating grows body only within this many steps
-	simAppleMaxDepth   = 10 // max depth for SimBFSApples
-	simAppleMaxTargets = 10 // max apple targets for SimBFSApples
+	simAppleMaxDepth   = 15 // max depth for SimBFSApples
+	simAppleMaxTargets = 15 // max apple targets for SimBFSApples
 )
 
 // SimTarget describes a physically reachable apple found by SimBFSApples.
@@ -416,7 +416,8 @@ func (s *Sim) SimBFSApples(sn *Snake) []SimTarget {
 	}}
 	var targets []SimTarget
 
-	for qi := 0; qi < len(queue) && len(targets) < simAppleMaxTargets; qi++ {
+	const simMaxNodes = 2000
+	for qi := 0; qi < len(queue) && qi < simMaxNodes && len(targets) < simAppleMaxTargets; qi++ {
 		cur := queue[qi]
 		if cur.dist >= simAppleMaxDepth {
 			continue
@@ -634,7 +635,8 @@ func (s *Sim) SurfBFS(sn *Snake) []SurfReach {
 
 	bestSurf := make(map[int]SurfReach)
 
-	for qi := 0; qi < len(queue); qi++ {
+	const surfMaxNodes = 2000
+	for qi := 0; qi < len(queue) && qi < surfMaxNodes; qi++ {
 		cur := queue[qi]
 		if cur.dist >= surfMaxDepth {
 			continue
