@@ -119,18 +119,18 @@ func TestDbgPipeline(t *testing.T) {
 	}
 
 	d.phaseInfluence()
-	d.phaseScoring()
-	t.Log("--- phaseScoring ---")
+	d.phasePartition()
+	t.Log("--- phasePartition ---")
 	for si, snIdx := range d.MySnakes {
 		sn := &g.Sn[snIdx]
-		t.Logf("[%d] snake %d  dir=%s target=%s", si, sn.ID, safeDir(d.AssignedDir[si]), cellStr(g, d.Assigned[si]))
-	}
-
-	d.phaseAssignment()
-	t.Log("--- phaseAssignment ---")
-	for si, snIdx := range d.MySnakes {
-		sn := &g.Sn[snIdx]
-		t.Logf("[%d] snake %d  dir=%s target=%s", si, sn.ID, safeDir(d.AssignedDir[si]), cellStr(g, d.Assigned[si]))
+		route := &d.P.Routes[si]
+		t.Logf("[%d] snake %d  dir=%s target=%s valid=%v apples=%d",
+			si, sn.ID, safeDir(d.AssignedDir[si]), cellStr(g, d.Assigned[si]),
+			route.Valid, len(route.AppleSeq))
+		for ai, ap := range route.AppleSeq {
+			ax, ay := g.XY(ap)
+			t.Logf("    route[%d] = (%d,%d)", ai, ax, ay)
+		}
 	}
 
 	d.phaseSafety()

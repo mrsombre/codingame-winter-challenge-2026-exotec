@@ -119,6 +119,19 @@ func TestPrintMap(t *testing.T) {
 		Size   int          `json:"size"`
 	}
 
+	type RouteStepJSON struct {
+		Dir     string     `json:"dir"`
+		ExpHead debugCoord `json:"expHead"`
+		Apple   int        `json:"apple"` // -1 = transit
+	}
+
+	type RouteJSON struct {
+		SnakeID  int              `json:"snakeId"`
+		Valid    bool             `json:"valid"`
+		Apples   []debugCoord     `json:"apples"`
+		Steps    []RouteStepJSON  `json:"steps"`
+	}
+
 	type MapJSON struct {
 		Seed     int64           `json:"seed"`
 		League   int             `json:"league"`
@@ -129,6 +142,7 @@ func TestPrintMap(t *testing.T) {
 		Snakes   []SnakeJSON     `json:"snakes"`
 		Surfaces []SurfJSON      `json:"surfaces"`
 		Clusters []ClusterJSON   `json:"clusters"`
+		Routes   []RouteJSON     `json:"routes"`
 	}
 
 	toCoord := func(cell int) debugCoord {
@@ -172,11 +186,13 @@ func TestPrintMap(t *testing.T) {
 		}
 	}
 
-	// Run real pipeline: phaseBFS + phaseInfluence
+	// Run real pipeline: phaseBFS + phaseInfluence + phasePartition
 	pl := &Plan{G: g}
+	pl.Init()
 	d := &Decision{G: g, P: pl}
 	d.phaseBFS()
 	d.phaseInfluence()
+	d.phasePartition()
 
 	snakes := make([]SnakeJSON, g.SNum)
 	for i := 0; i < g.SNum; i++ {
@@ -305,6 +321,29 @@ func TestPrintMap(t *testing.T) {
 		clusters[i] = ClusterJSON{ID: cl.ID, Apples: members, Size: cl.Size}
 	}
 
+	// Build route data from partition planner
+	var routes []RouteJSON
+	for si, snIdx := range d.MySnakes {
+		route := &pl.Routes[si]
+		sn := &g.Sn[snIdx]
+
+		rj := RouteJSON{
+			SnakeID: sn.ID,
+			Valid:   route.Valid,
+		}
+		for _, ap := range route.AppleSeq {
+			rj.Apples = append(rj.Apples, toCoord(ap))
+		}
+		for _, step := range route.Steps {
+			rj.Steps = append(rj.Steps, RouteStepJSON{
+				Dir:     dirName(step.Dir),
+				ExpHead: toCoord(step.ExpHead),
+				Apple:   step.Apple,
+			})
+		}
+		routes = append(routes, rj)
+	}
+
 	debugWriteJSON(t, "map.json", MapJSON{
 		Seed:     seed,
 		League:   testLeague,
@@ -315,6 +354,7 @@ func TestPrintMap(t *testing.T) {
 		Snakes:   snakes,
 		Surfaces: surfs,
 		Clusters: clusters,
+		Routes:   routes,
 	})
 }
 

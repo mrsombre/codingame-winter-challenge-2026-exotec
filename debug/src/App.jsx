@@ -101,33 +101,30 @@ function layerClusters(key, { snakeMap, clusterMap, clusterData }) {
   return { bg, content, outline }
 }
 
-// Layer: heat map
-function layerHeat(key, { snakeMap, heatMap }) {
+// Route colors: one per bot slot
+const routeColors = [
+  { bg: 'rgba(168,85,247,0.25)', dot: 'bg-purple-400', border: 'border-purple-500', text: 'text-purple-400', apple: 'rgba(168,85,247,0.5)' },
+  { bg: 'rgba(59,130,246,0.25)', dot: 'bg-blue-400', border: 'border-blue-500', text: 'text-blue-400', apple: 'rgba(59,130,246,0.5)' },
+  { bg: 'rgba(234,179,8,0.25)', dot: 'bg-yellow-400', border: 'border-yellow-500', text: 'text-yellow-400', apple: 'rgba(234,179,8,0.5)' },
+  { bg: 'rgba(34,197,94,0.25)', dot: 'bg-green-400', border: 'border-green-500', text: 'text-green-400', apple: 'rgba(34,197,94,0.5)' },
+]
+
+// Layer: init routes
+function layerRoutes(key, { snakeMap, routeStepMap, routeAppleMap }) {
   const snake = snakeMap[key]
-  const heat = heatMap[key]
+  const step = routeStepMap[key]
+  const appleInfo = routeAppleMap[key]
 
   let bg = ''
+  let outline = null
   let label = null
-  if (heat !== undefined) {
-    const { heat: h, myDist, opDist } = heat
-    // Color: green = ours, red = theirs, yellow = contested
-    if (h >= 9999) {
-      bg = 'bg-green-400/70' // exclusive ours
-    } else if (h <= -9999) {
-      bg = 'bg-red-400/70' // unreachable
-    } else if (h > 0) {
-      bg = 'bg-green-300/60' // we're faster
-    } else if (h < 0) {
-      bg = 'bg-red-300/60' // they're faster
-    } else {
-      bg = 'bg-yellow-300/60' // tied
-    }
-    const myLabel = myDist >= 0 ? myDist : '-'
-    const opLabel = opDist >= 0 ? opDist : '-'
+
+  if (appleInfo !== undefined) {
+    const rc = routeColors[appleInfo.slot % routeColors.length]
+    outline = { outline: `3px solid ${rc.apple}`, outlineOffset: '-2px' }
     label = (
-      <span className="absolute inset-0 flex flex-col items-center justify-center text-[7px] font-bold text-black pointer-events-none z-10 leading-tight">
-        <span>{h >= 9999 ? '++' : h <= -9999 ? '--' : h > 0 ? `+${h}` : `${h}`}</span>
-        <span className="text-[6px] opacity-70">{myLabel}/{opLabel}</span>
+      <span className={`absolute inset-0 flex items-center justify-center text-[8px] font-bold pointer-events-none z-10 ${rc.text}`}>
+        {appleInfo.order + 1}
       </span>
     )
   }
@@ -141,11 +138,16 @@ function layerHeat(key, { snakeMap, heatMap }) {
           } ${snake.isHead ? 'w-[80%] h-[80%]' : 'w-[60%] h-[60%]'}`}
         />
       )}
+      {step && !appleInfo && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+          <div className={`w-[30%] h-[30%] rounded-full ${routeColors[step.slot % routeColors.length].dot} opacity-70`} />
+        </div>
+      )}
       {label}
     </>
   )
 
-  return { bg, content, outline: null }
+  return { bg, content, outline }
 }
 
 // Layer: BFS paths
@@ -189,11 +191,11 @@ export default function App() {
   const [data, setData] = useState(null)
   const [cursor, setCursor] = useState(null)
   const [pinnedCell, setPinnedCell] = useState(null)
-  const [activeLayer, setActiveLayer] = useState(null) // null | 'surfaces' | 'bfs' | 'heat'
+  const [activeLayer, setActiveLayer] = useState(null) // null | 'surfaces' | 'bfs' | 'routes'
   const toggleLayer = (name) => setActiveLayer((prev) => prev === name ? null : name)
   const showSurfaces = activeLayer === 'surfaces'
   const showBFS = activeLayer === 'bfs'
-  const showHeat = activeLayer === 'heat'
+  const showRoutes = activeLayer === 'routes'
 
   const activeCell = pinnedCell || cursor
 
@@ -210,7 +212,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [pinnedCell])
 
-  const { w, h, walls, apples, snakes, surfaces, wallSet, appleSet, snakeMap, surfMap, snakeCellToId, heatMap, clusterMap, clusterData } = useMemo(() => {
+  const { w, h, walls, apples, snakes, surfaces, wallSet, appleSet, snakeMap, surfMap, snakeCellToId, heatMap, clusterMap, clusterData, routeStepMap, routeAppleMap, routeData } = useMemo(() => {
     if (!data) return {}
     const { w, h, walls, apples, snakes, surfaces } = data
     const wallSet = new Set(walls.map((c) => `${c.x},${c.y}`))
@@ -243,7 +245,26 @@ export default function App() {
     for (const c of (data.clusters ?? [])) {
       clusterData[c.id] = c
     }
-    return { w, h, walls, apples, snakes, surfaces, wallSet, appleSet, snakeMap, surfMap, snakeCellToId, heatMap, clusterMap, clusterData }
+    // Build route lookup maps: step cells and apple targets per bot slot
+    const routeStepMap = {}  // "x,y" -> { slot, stepIdx, dir }
+    const routeAppleMap = {} // "x,y" -> { slot, order }
+    const routeData = data.routes ?? []
+    for (let slot = 0; slot < routeData.length; slot++) {
+      const r = routeData[slot]
+      if (!r.valid) continue
+      for (let i = 0; i < (r.steps ?? []).length; i++) {
+        const s = r.steps[i]
+        const key = `${s.expHead.x},${s.expHead.y}`
+        if (!routeStepMap[key]) {
+          routeStepMap[key] = { slot, stepIdx: i, dir: s.dir }
+        }
+      }
+      for (let i = 0; i < (r.apples ?? []).length; i++) {
+        const a = r.apples[i]
+        routeAppleMap[`${a.x},${a.y}`] = { slot, order: i }
+      }
+    }
+    return { w, h, walls, apples, snakes, surfaces, wallSet, appleSet, snakeMap, surfMap, snakeCellToId, heatMap, clusterMap, clusterData, routeStepMap, routeAppleMap, routeData }
   }, [data])
 
   if (!data) return <div className="p-4 font-mono">Loading...</div>
@@ -305,8 +326,8 @@ export default function App() {
 
   // Pick active layer
   const showClusters = activeLayer === 'clusters'
-  const layerCtx = { appleSet, snakeMap, surfMap, linkPathSet, appleLinkPathSet, appleLinkDotSet, bfsHeadSet, bfsLandingSet, bfsAppleSet, heatMap, clusterMap, clusterData }
-  const renderLayer = showClusters ? layerClusters : showHeat ? layerHeat : showBFS ? layerBFS : showSurfaces ? layerSurfaces : layerDefault
+  const layerCtx = { appleSet, snakeMap, surfMap, linkPathSet, appleLinkPathSet, appleLinkDotSet, bfsHeadSet, bfsLandingSet, bfsAppleSet, heatMap, clusterMap, clusterData, routeStepMap, routeAppleMap }
+  const renderLayer = showClusters ? layerClusters : showRoutes ? layerRoutes : showBFS ? layerBFS : showSurfaces ? layerSurfaces : layerDefault
 
   const cellHandlers = (x, y) => ({
     onMouseEnter: () => setCursor({ x, y }),
@@ -395,6 +416,8 @@ export default function App() {
       </div>
       <div className="min-w-0 w-[20%] shrink pt-4 text-sm overflow-y-auto overflow-x-hidden">
         <p>current: {cursor ? `${cursor.x},${cursor.y}` : '-'}</p>
+        <p>seed: {data.seed ?? '-'}</p>
+        <p>league: {data.league ?? '-'}</p>
         <p>w: {w} h: {h}</p>
         <p>walls: {walls.length} apples: {apples.length}</p>
         <p>snakes: {snakes.length}</p>
@@ -412,12 +435,11 @@ export default function App() {
             <div className="flex items-center gap-1"><div className="w-3 h-3 border-2 border-red-500" /> cluster (colored by ID)</div>
             <div className="flex items-center gap-1"><div className="w-3 h-3 border-2 border-gray-400" /> isolated (size=1)</div>
           </>}
-          {showHeat && <>
-            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-green-400/70" /> exclusive ours</div>
-            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-green-300/60" /> we're faster</div>
-            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-yellow-300/60" /> tied</div>
-            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-red-300/60" /> they're faster</div>
-            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-red-400/70" /> unreachable</div>
+          {showRoutes && <>
+            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-purple-400 rounded-full" /> bot 0 path</div>
+            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-blue-400 rounded-full" /> bot 1 path</div>
+            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-yellow-400 rounded-full" /> bot 2 path</div>
+            <div className="flex items-center gap-1"><div className="w-3 h-3 border-2 border-purple-500" /> target apple (numbered)</div>
           </>}
           {showSurfaces && <>
             <div className="flex items-center gap-1"><div className="w-3 h-3 bg-orange-400 rounded-full" /> surface path</div>
@@ -426,7 +448,7 @@ export default function App() {
           </>}
         </div>
         <div className="mt-3 flex gap-2">
-          {['surfaces', 'bfs', 'heat', 'clusters'].map((name) => (
+          {['surfaces', 'bfs', 'routes', 'clusters'].map((name) => (
             <Button
               key={name}
               variant={activeLayer === name ? 'default' : 'outline'}
@@ -492,15 +514,23 @@ export default function App() {
                 </div>
               )
             })()}
-            {showHeat && activeCell && (() => {
-              const h = heatMap[`${activeCell.x},${activeCell.y}`]
-              if (!h) return null
+            {showRoutes && (() => {
               return (
-                <div className="mt-2 text-green-400">
-                  <p className="font-bold">apple ({activeCell.x},{activeCell.y})</p>
-                  <p>heat: {h.heat >= 9999 ? '++' : h.heat <= -9999 ? '--' : h.heat}</p>
-                  <p>my dist: {h.myDist >= 0 ? h.myDist : 'unreachable'}</p>
-                  <p>op dist: {h.opDist >= 0 ? h.opDist : 'unreachable'}</p>
+                <div className="mt-2">
+                  {routeData.map((r, slot) => {
+                    const rc = routeColors[slot % routeColors.length]
+                    return (
+                      <div key={slot} className={`mt-1 ${rc.text}`}>
+                        <p className="font-bold">snake #{r.snakeId} {r.valid ? '' : '(invalid)'}</p>
+                        <p className="text-[11px]">apples: {(r.apples ?? []).length} steps: {(r.steps ?? []).length}</p>
+                        <div className="text-[11px]">
+                          {(r.apples ?? []).map((a, i) => (
+                            <span key={i}>{i + 1}:({a.x},{a.y}) </span>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               )
             })()}

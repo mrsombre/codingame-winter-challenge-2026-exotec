@@ -2,10 +2,33 @@ package main
 
 import "sort"
 
+// RouteStep represents one expected step in a bot's planned route.
+type RouteStep struct {
+	Apple   int // target apple cell (-1 = transit step, not eating)
+	Dir     int // direction to move this turn
+	ExpHead int // expected head cell AFTER move + gravity
+	TurnNum int // absolute game turn number for this step
+}
+
+// BotRoute holds the planned apple sequence and move-by-move steps for one snake.
+type BotRoute struct {
+	SnIdx      int         // index into g.Sn[]
+	AppleSeq   []int       // planned apple cell sequence (up to routeMaxDepth)
+	Steps      []RouteStep // move-by-move plan (1 entry per game turn)
+	StepCursor int         // current position in Steps
+	Valid      bool        // false = plan invalidated, use greedy
+}
+
 // Plan holds persistent data across turns.
 type Plan struct {
 	G          *Game
 	PrevAssign [MaxPSn]int // previous turn's assigned apple cell (-1 = none)
+
+	// Stable partition: computed once on turn 1, followed until invalidated.
+	Routes        [MaxPSn]BotRoute
+	PlannedApples []bool // [NCells] true if apple is in any valid route
+	TurnCount     int    // absolute turn counter (0 = first turn)
+	Initialized   bool   // true after first-turn planning is done
 }
 
 // Init precomputes the surface graph from the current game state.
@@ -19,6 +42,10 @@ func (p *Plan) Init() {
 	for i := range p.PrevAssign {
 		p.PrevAssign[i] = -1
 	}
+
+	p.PlannedApples = make([]bool, g.NCells)
+	p.TurnCount = 0
+	p.Initialized = false
 
 	if len(g.SurfAt) != g.NCells {
 		g.SurfAt = make([]int, g.NCells)
@@ -404,12 +431,13 @@ func (p *Plan) buildAppleLinks() {
 	}
 }
 
-// Turn marks eaten apple surfaces as SurfNone.
+// Turn marks eaten apple surfaces as SurfNone and advances turn counter.
 func (p *Plan) Turn() {
 	g := p.G
 	if g == nil {
 		return
 	}
+	p.TurnCount++
 
 	appleAt := make([]bool, g.NCells)
 	for i := 0; i < g.ANum; i++ {

@@ -10,7 +10,8 @@
       "Bash(* go test *)",
       "Bash(go test *)",
       "Bash(go mod *)",
-      "Bash(make *)"
+      "Bash(task *)",
+      "Bash(python3 *)"
     ]
   }
 }

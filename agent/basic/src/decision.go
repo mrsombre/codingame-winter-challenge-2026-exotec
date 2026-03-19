@@ -43,8 +43,7 @@ type Decision struct {
 func (d *Decision) Decide() {
 	d.phaseBFS()
 	d.phaseInfluence()
-	d.phaseScoring()
-	d.phaseAssignment()
+	d.phasePartition()
 	d.phaseSafety()
 	d.command()
 }
