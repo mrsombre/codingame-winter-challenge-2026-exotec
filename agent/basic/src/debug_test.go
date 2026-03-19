@@ -39,7 +39,7 @@ func dbgGameDebug() (*Game, int64) {
 		seed = s
 	}
 	g := dbgGame()
-	g.BuildSurfaceGraph()
+	(&Plan{G: g}).Init()
 	return g, seed
 }
 
@@ -86,13 +86,11 @@ func TestPrintMap(t *testing.T) {
 	}
 
 	type PlanJSON struct {
-		OnSurface    bool             `json:"onSurface"`
-		Apples       []ReachAppleJSON `json:"apples"`
-		BestApple    *debugCoord      `json:"bestApple,omitempty"`
-		BestDist     int              `json:"bestDist"`
-		Conflicting  bool             `json:"conflicting"`
-		ConflictWith int              `json:"conflictWith"`
-		SurfReaches  []SurfReachJSON  `json:"surfReaches"`
+		OnSurface   bool             `json:"onSurface"`
+		Apples      []ReachAppleJSON `json:"apples"`
+		BestApple   *debugCoord      `json:"bestApple,omitempty"`
+		BestDist    int              `json:"bestDist"`
+		SurfReaches []SurfReachJSON  `json:"surfReaches"`
 	}
 
 	type SnakeJSON struct {
@@ -105,18 +103,11 @@ func TestPrintMap(t *testing.T) {
 	}
 
 	type AppleHeatJSON struct {
-		X         int `json:"x"`
-		Y         int `json:"y"`
-		Heat      int `json:"heat"`
-		MyDist    int `json:"myDist"`
-		OpDist    int `json:"opDist"`
-		ClusterID int `json:"clusterId"`
-	}
-
-	type ClusterJSON struct {
-		ID     int          `json:"id"`
-		Apples []debugCoord `json:"apples"`
-		Size   int          `json:"size"`
+		X      int `json:"x"`
+		Y      int `json:"y"`
+		Heat   int `json:"heat"`
+		MyDist int `json:"myDist"`
+		OpDist int `json:"opDist"`
 	}
 
 	type RouteStepJSON struct {
@@ -141,7 +132,7 @@ func TestPrintMap(t *testing.T) {
 		Apples   []AppleHeatJSON `json:"apples"`
 		Snakes   []SnakeJSON     `json:"snakes"`
 		Surfaces []SurfJSON      `json:"surfaces"`
-		Clusters []ClusterJSON   `json:"clusters"`
+		Clusters []struct{}      `json:"clusters"`
 		Routes   []RouteJSON     `json:"routes"`
 	}
 
@@ -214,15 +205,12 @@ func TestPrintMap(t *testing.T) {
 		onSurf := g.IsInGrid(head) && g.SurfAt[head] >= 0 && sn.Sp == 0
 
 		plan := PlanJSON{
-			OnSurface:    onSurf,
-			ConflictWith: -1,
+			OnSurface: onSurf,
 		}
 
 		// Use BFS results from the unified arrays (indexed by snake slot)
 		bp := &d.BFS.Plan[i]
 		reach := bp.Apples
-		plan.Conflicting = bp.Conflicting
-		plan.ConflictWith = bp.ConflictWith
 
 		if !onSurf {
 			surfEntries := d.BFS.SurfBFS[i]
@@ -255,14 +243,9 @@ func TestPrintMap(t *testing.T) {
 	for i := 0; i < g.ANum; i++ {
 		ax, ay := g.XY(g.Ap[i])
 		inf := &d.Influence[i]
-		cid := -1
-		if g.ClusterAt[g.Ap[i]] >= 0 {
-			cid = g.ClusterAt[g.Ap[i]]
-		}
 		apples[i] = AppleHeatJSON{
 			X: ax, Y: ay,
 			Heat: inf.Heat, MyDist: inf.MyBest, OpDist: inf.OpBest,
-			ClusterID: cid,
 		}
 	}
 
@@ -312,15 +295,6 @@ func TestPrintMap(t *testing.T) {
 		}
 	}
 
-	clusters := make([]ClusterJSON, len(g.Clusters))
-	for i, cl := range g.Clusters {
-		members := make([]debugCoord, cl.Size)
-		for j, cell := range cl.Apples {
-			members[j] = toCoord(cell)
-		}
-		clusters[i] = ClusterJSON{ID: cl.ID, Apples: members, Size: cl.Size}
-	}
-
 	// Build route data from partition planner
 	var routes []RouteJSON
 	for si, snIdx := range d.MySnakes {
@@ -353,7 +327,7 @@ func TestPrintMap(t *testing.T) {
 		Apples:   apples,
 		Snakes:   snakes,
 		Surfaces: surfs,
-		Clusters: clusters,
+		Clusters: nil,
 		Routes:   routes,
 	})
 }

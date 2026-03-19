@@ -4,7 +4,15 @@ package main
 // Evaluates every direction for every friendly snake in a single pass.
 // Stores per-snake results. Then overrides, deconflicts friendlies, validates.
 
-const safetyFloodCramped = 6
+// crampedThreshold returns the minimum flood count for a snake to feel safe.
+// Scales mildly with body length: longer snakes need slightly more room.
+func crampedThreshold(bodyLen int) int {
+	t := bodyLen + 3
+	if t < 6 {
+		t = 6
+	}
+	return t
+}
 
 // Direction tiers (higher = safer).
 const (
@@ -210,14 +218,14 @@ func evalDir(
 		}
 	}
 
-	// Classify
+	// Classify using body-length-aware threshold
+	thresh := crampedThreshold(sn.Len)
 	switch {
 	case flood == 0:
 		return dirEval{tierDeadEnd, 0}
-	case flood < safetyFloodCramped:
-		if risky {
-			return dirEval{tierCramped, flood} // downgrade risky+cramped
-		}
+	case risky && flood < thresh:
+		return dirEval{tierCramped, flood} // cramped + risky, avoid if possible
+	case flood < thresh:
 		return dirEval{tierCramped, flood}
 	case risky:
 		return dirEval{tierRisky, flood}

@@ -37,7 +37,6 @@ const (
 	MaxPSn = 4   // max snakes per player
 	MaxSeg = 256 // max body parts per snake
 	MaxAp  = 128 // max power sources (apples)
-	MaxAG  = 33  // max above-ground counter for BFS (capped for memory)
 )
 
 // Snake holds one snake's current body as flat cell indices, head-first.
@@ -86,13 +85,6 @@ type AppleLink struct {
 	Path  []int // full path: [start cell, ..., apple cell]
 }
 
-// Constellation represents a cluster of spatially adjacent apples.
-type Constellation struct {
-	ID     int
-	Apples []int // member apple cell indices
-	Size   int
-}
-
 type Game struct {
 	ID int
 
@@ -105,10 +97,8 @@ type Game struct {
 	InGrid []bool   // true for game-grid cells, false for border cells
 
 	// Surface graph data, populated by Plan.Init.
-	Surfs     []Surface
-	SurfAt    []int // cell -> surface index (-1 if not on surface)
-	Clusters  []Constellation
-	ClusterAt []int // apple cell -> cluster ID (-1 if not in cluster)
+	Surfs  []Surface
+	SurfAt []int // cell -> surface index (-1 if not on surface)
 
 	MyIDs [MaxPSn]int // my snake IDs
 	MyN   int

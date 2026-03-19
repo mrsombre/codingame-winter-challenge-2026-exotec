@@ -25,6 +25,31 @@ func (d *Decision) phaseInfluence() {
 		d.HeatByCell[i] = heatUnreachable
 	}
 
+	// Build per-apple best distance from all snakes' reach lists in one pass.
+	// Each reach entry is already sorted by dist, so first hit per apple is best.
+	type bestEntry struct {
+		dist  int
+		snake int
+	}
+	myBest := make(map[int]bestEntry, g.ANum)
+	opBest := make(map[int]bestEntry, g.ANum)
+
+	for i := 0; i < g.SNum; i++ {
+		sn := &g.Sn[i]
+		if !sn.Alive {
+			continue
+		}
+		tbl := &opBest
+		if sn.Owner == 0 {
+			tbl = &myBest
+		}
+		for _, ri := range d.BFS.Reach[i] {
+			if prev, ok := (*tbl)[ri.Apple]; !ok || ri.Dist < prev.dist {
+				(*tbl)[ri.Apple] = bestEntry{dist: ri.Dist, snake: i}
+			}
+		}
+	}
+
 	for a := 0; a < g.ANum; a++ {
 		appleCell := g.Ap[a]
 		c := &d.Influence[a]
@@ -33,32 +58,15 @@ func (d *Decision) phaseInfluence() {
 		c.MySnake = -1
 		c.OpSnake = -1
 
-		// Find closest friendly and enemy snake that can reach this apple.
-		for i := 0; i < g.SNum; i++ {
-			sn := &g.Sn[i]
-			if !sn.Alive {
-				continue
-			}
-			for _, ri := range d.BFS.Reach[i] {
-				if ri.Apple != appleCell {
-					continue
-				}
-				if sn.Owner == 0 {
-					if c.MyBest < 0 || ri.Dist < c.MyBest {
-						c.MyBest = ri.Dist
-						c.MySnake = i
-					}
-				} else {
-					if c.OpBest < 0 || ri.Dist < c.OpBest {
-						c.OpBest = ri.Dist
-						c.OpSnake = i
-					}
-				}
-				break
-			}
+		if e, ok := myBest[appleCell]; ok {
+			c.MyBest = e.dist
+			c.MySnake = e.snake
+		}
+		if e, ok := opBest[appleCell]; ok {
+			c.OpBest = e.dist
+			c.OpSnake = e.snake
 		}
 
-		// Compute heat: opDist - myDist
 		switch {
 		case c.MyBest < 0:
 			c.Heat = heatUnreachable

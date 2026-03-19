@@ -97,7 +97,10 @@ func TestPlanUpdateAppleSurfacesMarksSurfNoneAndRemovesReach(t *testing.T) {
 		Body:  []int{g.Idx(1, 4), g.Idx(0, 4), g.Idx(-1, 4)},
 		Len:   3,
 	}
-	reachBefore := surfaceReach(g, sn, true)
+	head := sn.Body[0]
+	sid0 := g.SurfAt[head]
+	entriesBefore := []SurfReach{{SurfID: sid0, Dist: 0, FirstDir: -1, Landing: head}}
+	reachBefore := surfGraphReach(g, entriesBefore, sn.Len, head)
 	assert.True(t, hasReachApple(reachBefore, removedApple), "removed apple should be reachable before update")
 	assert.True(t, hasReachApple(reachBefore, keptApple), "kept apple should be reachable before update")
 
@@ -107,7 +110,8 @@ func TestPlanUpdateAppleSurfacesMarksSurfNoneAndRemovesReach(t *testing.T) {
 
 	assert.Equal(t, SurfNone, g.Surfs[removedSID].Type, "removed apple surface should become SurfNone")
 
-	reachAfter := surfaceReach(g, sn, true)
+	entriesAfter := []SurfReach{{SurfID: sid0, Dist: 0, FirstDir: -1, Landing: head}}
+	reachAfter := surfGraphReach(g, entriesAfter, sn.Len, head)
 	assert.False(t, hasReachApple(reachAfter, removedApple), "removed apple should no longer be reachable for eating")
 	assert.True(t, hasReachApple(reachAfter, keptApple), "remaining apple should stay reachable")
 }
