@@ -40,6 +40,17 @@ func TestParseArgsAcceptsSeedPrefix(t *testing.T) {
 	assert.Equal(t, int64(1001), got.Seed)
 }
 
+func TestParseArgsParsesTraceAndNoSwap(t *testing.T) {
+	got, err := parseArgs([]string{
+		"--p0-bin", "./bin/p0",
+		"--trace-out", "./tmp/trace.jsonl.gz",
+		"--no-swap",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "./tmp/trace.jsonl.gz", got.TraceOut)
+	assert.True(t, got.NoSwap)
+}
+
 func TestParseArgsRejectsInvalidLeagueLevel(t *testing.T) {
 	_, err := parseArgs([]string{
 		"--p0-bin", "./bin/p0",
@@ -61,4 +72,13 @@ func TestParseArgsRejectsNonPositiveSeedIncrement(t *testing.T) {
 			assert.EqualError(t, err, "--seedx must be >= 1")
 		})
 	}
+}
+
+func TestParseArgsRequiresTracePath(t *testing.T) {
+	_, err := parseArgs([]string{
+		"--p0-bin", "./bin/p0",
+		"--trace-out",
+	})
+	require.Error(t, err)
+	assert.EqualError(t, err, "missing value for --trace-out")
 }

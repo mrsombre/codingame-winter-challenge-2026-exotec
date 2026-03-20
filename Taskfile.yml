@@ -10,13 +10,18 @@ vars:
 
 env:
   GOCACHE: '{{.ROOT_DIR}}/tmp/go-build'
-  GOMAXPROCS: '1'
+  UV_CACHE_DIR: '{{.ROOT_DIR}}/tmp/uv-cache'
 
 tasks:
   test:
     desc: Run tests for the selected agent logic
     cmds:
       - go test ./agent/{{.LOGIC}}/src
+
+  test-match:
+    desc: Run tests for the local match runner
+    cmds:
+      - go test ./internal/match
 
   bundle-agent:
     desc: Generate the arena bundle for the selected agent logic
@@ -55,6 +60,14 @@ tasks:
     cmds:
       - '{{.BIN_DIR}}/arena --p0-bin {{.BIN_DIR}}/{{.LOGIC}} --p1-bin {{.BIN_DIR}}/opponent {{.ENGINE_ARGS}} {{.GAME_ARGS}}'
 
+  match-bin:
+    desc: Run two pre-built binaries against each other
+    silent: true
+    deps:
+      - build-arena
+    cmds:
+      - '{{.BIN_DIR}}/arena --p0-bin {{.BIN_DIR}}/{{.P0}} --p1-bin {{.BIN_DIR}}/{{.P1}} {{.ENGINE_ARGS}} {{.GAME_ARGS}}'
+
   replay:
     desc: Regenerate debug JSON in ./debug/public
     cmds:
@@ -67,6 +80,44 @@ tasks:
     dir: debug
     cmds:
       - pnpm dev
+
+  benchmark-teacher:
+    desc: Record the selected teacher for nn training
+    cmds:
+      - uv run --project ./agent/nn/train python ./agent/nn/train/teacher_info.py
+
+  export-traces:
+    desc: Export raw gzip JSONL traces from opponent self-play
+    deps:
+      - build-opponent
+      - build-arena
+    cmds:
+      - mkdir -p ./agent/nn/train/traces
+      - '{{.BIN_DIR}}/arena --p0-bin {{.BIN_DIR}}/opponent --p1-bin {{.BIN_DIR}}/opponent --trace-out ./agent/nn/train/traces/opponent.jsonl.gz {{.ENGINE_ARGS}} {{.GAME_ARGS}}'
+
+  export-traces-large:
+    desc: Export 5000 mixed-seed opponent self-play traces for nn training
+    deps:
+      - build-opponent
+      - build-arena
+    cmds:
+      - mkdir -p ./agent/nn/train/traces
+      - '{{.BIN_DIR}}/arena --p0-bin {{.BIN_DIR}}/opponent --p1-bin {{.BIN_DIR}}/opponent --trace-out ./agent/nn/train/traces/opponent.jsonl.gz --simulations 5000 --parallel 10 --seed 5503391867020331000 {{.GAME_ARGS}}'
+
+  train-nn:
+    desc: Train the tiny distilled NN and emit Go weights
+    cmds:
+      - uv run --project ./agent/nn/train python ./agent/nn/train/train.py
+
+  evaluate-nn:
+    desc: Evaluate the nn bot against the opponent teacher
+    deps:
+      - task: build-agent
+        vars: {LOGIC: nn}
+      - build-opponent
+      - build-arena
+    cmds:
+      - uv run --project ./agent/nn/train python ./agent/nn/train/evaluate.py
 
   clean:
     desc: Remove built binaries

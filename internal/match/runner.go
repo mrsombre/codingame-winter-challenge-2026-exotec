@@ -27,6 +27,8 @@ type MatchOptions struct {
 	P1Bin       string
 	Debug       bool
 	Timing      bool
+	NoSwap      bool
+	TraceWriter *TraceWriter
 }
 
 type Runner struct {
@@ -164,7 +166,7 @@ func (r MatchResult) RenderMatch() string {
 
 func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 	// Swap sides unless in debug mode. Uses seed bit for deterministic ~50/50 split.
-	swapSides := !runner.Options.Debug && seed%2 != 0
+	swapSides := !runner.Options.Debug && !runner.Options.NoSwap && seed%2 != 0
 
 	players := []*engine.Player{
 		engine.NewPlayer(0),
@@ -206,6 +208,7 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 
 	maxTurns := runner.Options.MaxTurns
 	turn := 0
+	traceRows := make([]TraceTurn, 0, maxTurns)
 	for turn = 0; !referee.Ended() && turn < maxTurns; turn++ {
 		referee.ResetGameTurnData()
 		if runner.Options.Debug {
@@ -232,6 +235,13 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 			}
 		}
 
+		if runner.Options.TraceWriter != nil {
+			traceRows = append(traceRows, snapshotTraceTurn(simulationID, seed, turn, game, players, swapSides))
+			if len(traceRows) == 1 {
+				addTraceMap(&traceRows[0], game)
+			}
+		}
+
 		handlePlayerCommands(players, referee)
 		if referee.ActivePlayers(players) < 2 {
 			referee.EndGame()
@@ -253,6 +263,14 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 	if swapSides {
 		result = swapMatchSides(result)
 		result.Swapped = true
+	}
+	if runner.Options.TraceWriter != nil {
+		for i := range traceRows {
+			traceRows[i].Winner = result.Winner
+		}
+		if err := runner.Options.TraceWriter.WriteMatch(traceRows); err != nil {
+			panic(err)
+		}
 	}
 	return result
 }

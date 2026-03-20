@@ -21,8 +21,10 @@ type runnerMetadata struct {
 	Seed          int64  `json:"seed"`
 	SeedIncrement *int64 `json:"seed_increment,omitempty"`
 	OutputMatches bool   `json:"output_matches"`
+	TraceOut      string `json:"trace_out,omitempty"`
 	MaxTurns      int    `json:"max_turns"`
 	LeagueLevel   int    `json:"league_level"`
+	NoSwap        bool   `json:"no_swap"`
 	P0Left        int    `json:"p0_left"`
 	P0Right       int    `json:"p0_right"`
 }
@@ -45,7 +47,18 @@ func Run(args []string, stdout io.Writer) error {
 		P1Bin:       parsed.P1Bin,
 		Debug:       parsed.Debug,
 		Timing:      parsed.Timing,
+		NoSwap:      parsed.NoSwap,
 	})
+	traceWriter, err := NewTraceWriter(parsed.TraceOut)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if traceWriter != nil {
+			_ = traceWriter.Close()
+		}
+	}()
+	runner.Options.TraceWriter = traceWriter
 	results := runMatches(parsed.BatchOptions, runner.RunMatch)
 
 	p0Left := 0
@@ -64,8 +77,10 @@ func Run(args []string, stdout io.Writer) error {
 			Seed:          parsed.Seed,
 			SeedIncrement: parsed.SeedIncrement,
 			OutputMatches: parsed.OutputMatches,
+			TraceOut:      parsed.TraceOut,
 			MaxTurns:      parsed.MaxTurns,
 			LeagueLevel:   parsed.LeagueLevel,
+			NoSwap:        parsed.NoSwap,
 			P0Left:        p0Left,
 			P0Right:       len(results) - p0Left,
 		},

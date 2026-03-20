@@ -21,10 +21,12 @@ type ParsedArgs struct {
 	BatchOptions
 	P0Bin       string
 	P1Bin       string
+	TraceOut    string
 	MaxTurns    int
 	LeagueLevel int
 	Debug       bool
 	Timing      bool
+	NoSwap      bool
 	Help        bool
 }
 
@@ -92,6 +94,14 @@ func parseArgs(args []string) (ParsedArgs, error) {
 			parsed.Debug = true
 		case "--timing":
 			parsed.Timing = true
+		case "--no-swap":
+			parsed.NoSwap = true
+		case "--trace-out":
+			i++
+			if i >= len(args) {
+				return ParsedArgs{}, fmt.Errorf("missing value for --trace-out")
+			}
+			parsed.TraceOut = args[i]
 		case "--max-turns":
 			i++
 			if i >= len(args) {
@@ -166,6 +176,8 @@ Options:
   --seed <N>           Base RNG seed (default: current time)
   --seedx <N>          Seed increment per match (seed_i = seed + i*N)
   --output-matches     Include per-match results in JSON output
+  --trace-out <PATH>   Write gzip JSONL turn traces for training
+  --no-swap            Disable automatic side swapping
   --debug              Force one match, fixed sides, print map/turn trace to stderr
   --max-turns <N>      Maximum turns per match (default: 200)
   --league-level <N>   Game league level 1..4 (default: 4)

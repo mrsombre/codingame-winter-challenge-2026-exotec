@@ -12,11 +12,11 @@ func TestSummarizeMatchesOmitsTimingTotalsAndRoundsAverage(t *testing.T) {
 	results := []MatchResult{
 		{
 			Scores:            [2]int{17, 0},
-			TimeToFirstAnswer: [2]time.Duration{111114000 * time.Microsecond, 0},
+			TimeToFirstAnswer: [2]time.Duration{111114 * time.Microsecond, 0},
 		},
 		{
 			Scores:            [2]int{19, 0},
-			TimeToFirstAnswer: [2]time.Duration{111046000 * time.Microsecond, 0},
+			TimeToFirstAnswer: [2]time.Duration{111046 * time.Microsecond, 0},
 		},
 	}
 
