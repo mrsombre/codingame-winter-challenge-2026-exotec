@@ -11,6 +11,7 @@ type runnerOutput struct {
 	P1Bin       string            `json:"p1_bin"`
 	Runner      runnerMetadata    `json:"runner"`
 	Summary     MatchSummary      `json:"summary"`
+	BadCommands []BadCommandInfo  `json:"bad_commands,omitempty"`
 	WorstLosses []json.RawMessage `json:"worst_losses,omitempty"`
 	Matches     []json.RawMessage `json:"matches,omitempty"`
 }
@@ -68,6 +69,11 @@ func Run(args []string, stdout io.Writer) error {
 		}
 	}
 
+	var allBadCommands []BadCommandInfo
+	for _, r := range results {
+		allBadCommands = append(allBadCommands, r.BadCommands...)
+	}
+
 	out := runnerOutput{
 		P0Bin: parsed.P0Bin,
 		P1Bin: parsed.P1Bin,
@@ -84,7 +90,8 @@ func Run(args []string, stdout io.Writer) error {
 			P0Left:        p0Left,
 			P0Right:       len(results) - p0Left,
 		},
-		Summary: SummarizeMatches(results),
+		Summary:     SummarizeMatches(results),
+		BadCommands: allBadCommands,
 	}
 	// Always include worst 5 losses
 	worstIndices := FindWorstLosses(results, 5)

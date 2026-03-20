@@ -35,6 +35,7 @@ func (p *Player) GetBirds() []*Bird              { return p.birds }
 func (p *Player) GetScore() int                  { return p.score }
 func (p *Player) SetScore(score int)             { p.score = score }
 func (p *Player) IsDeactivated() bool            { return p.deactivated }
+func (p *Player) DeactivationReason() string     { return p.deactivationReason }
 func (p *Player) IsTimedOut() bool               { return p.timedOut }
 func (p *Player) SetTimedOut(v bool)             { p.timedOut = v }
 func (p *Player) GetExpectedOutputLines() int    { return 1 }

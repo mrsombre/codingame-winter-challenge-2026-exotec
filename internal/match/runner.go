@@ -45,6 +45,14 @@ func NewRunner(options MatchOptions) *Runner {
 	return &Runner{Options: options}
 }
 
+type BadCommandInfo struct {
+	Seed    int64  `json:"seed"`
+	Player  int    `json:"player"`
+	Turn    int    `json:"turn"`
+	Command string `json:"command"`
+	Reason  string `json:"reason"`
+}
+
 type MatchResult struct {
 	ID                int
 	Seed              int64
@@ -55,6 +63,7 @@ type MatchResult struct {
 	BotsLost          [2]int
 	Winner            int
 	LossReasons       [2]LossReason
+	BadCommands       []BadCommandInfo
 	TimeToFirstAnswer [2]time.Duration
 	TimeToTurnP99     [2]time.Duration
 	TimeToTurnMax     [2]time.Duration
@@ -208,12 +217,17 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 
 	maxTurns := runner.Options.MaxTurns
 	turn := 0
+	var badCommands []BadCommandInfo
 	traceRows := make([]TraceTurn, 0, maxTurns)
 	for turn = 0; !referee.Ended() && turn < maxTurns; turn++ {
 		referee.ResetGameTurnData()
 		if runner.Options.Debug {
 			printDebugTurnState("start", turn, game)
 		}
+
+		// Save pre-command state for bad command detection.
+		wasDeactivated := [2]bool{players[0].IsDeactivated(), players[1].IsDeactivated()}
+		playerOutputs := [2]string{}
 
 		for _, player := range players {
 			if player.IsDeactivated() || referee.ShouldSkipPlayerTurn(player) {
@@ -230,6 +244,9 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 				}
 			}
 			_ = player.Execute()
+			if outs := player.GetOutputs(); len(outs) > 0 {
+				playerOutputs[player.GetIndex()] = outs[0]
+			}
 			if runner.Options.Debug {
 				fmt.Fprintf(os.Stderr, "turn %d p%d output: %s\n", turn, player.GetIndex(), strings.Join(player.GetOutputs(), " | "))
 			}
@@ -243,6 +260,20 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 		}
 
 		handlePlayerCommands(players, referee)
+
+		// Detect newly deactivated players (bad commands).
+		for i, player := range players {
+			if !wasDeactivated[i] && player.IsDeactivated() {
+				badCommands = append(badCommands, BadCommandInfo{
+					Seed:    seed,
+					Player:  i,
+					Turn:    turn,
+					Command: playerOutputs[i],
+					Reason:  player.DeactivationReason(),
+				})
+			}
+		}
+
 		if referee.ActivePlayers(players) < 2 {
 			referee.EndGame()
 			break
@@ -260,6 +291,7 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 	referee.OnEnd()
 
 	result := buildMatchResult(simulationID, seed, turn, referee.Game, players, controllers)
+	result.BadCommands = badCommands
 	if swapSides {
 		result = swapMatchSides(result)
 		result.Swapped = true
@@ -400,6 +432,9 @@ func swapMatchSides(r MatchResult) MatchResult {
 	r.TimeToFirstAnswer[0], r.TimeToFirstAnswer[1] = r.TimeToFirstAnswer[1], r.TimeToFirstAnswer[0]
 	r.TimeToTurnP99[0], r.TimeToTurnP99[1] = r.TimeToTurnP99[1], r.TimeToTurnP99[0]
 	r.TimeToTurnMax[0], r.TimeToTurnMax[1] = r.TimeToTurnMax[1], r.TimeToTurnMax[0]
+	for i := range r.BadCommands {
+		r.BadCommands[i].Player = 1 - r.BadCommands[i].Player
+	}
 	switch r.Winner {
 	case 0:
 		r.Winner = 1

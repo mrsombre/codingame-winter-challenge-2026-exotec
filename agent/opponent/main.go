@@ -825,6 +825,61 @@ func floodDist(start Point, blocked *BitGrid) (int, []int) {
 	return count, dist
 }
 
+func cmdFlood(body []Point, facing Direction, occupied *BitGrid) (int, []int) {
+	n := W * H
+	dist := make([]int, n)
+	for i := range dist {
+		dist[i] = Unreachable
+	}
+	head := body[0]
+	if grid.IsWall(head) || (occupied != nil && occupied.Has(head)) {
+		return 0, dist
+	}
+	dist[head.Y*W+head.X] = 0
+	type landing struct {
+		pos  Point
+		dist int
+	}
+	var landings []landing
+	landings = append(landings, landing{pos: head, dist: 0})
+	for _, dir := range state.VMoves(head, facing) {
+		nb, _, alive, _, _ := simMove(body, facing, dir, nil, occupied)
+		if !alive {
+			continue
+		}
+		nh := nb[0]
+		ni := nh.Y*W + nh.X
+		if ni >= 0 && ni < n && dist[ni] == Unreachable {
+			dist[ni] = 1
+			landings = append(landings, landing{pos: nh, dist: 1})
+		}
+	}
+	q := state.DistQ[:0]
+	for _, l := range landings {
+		q = append(q, l.pos)
+	}
+	count := 0
+	for i := 0; i < len(q); i++ {
+		p := q[i]
+		count++
+		d := dist[p.Y*W+p.X]
+		for dir := DirUp; dir <= DirLeft; dir++ {
+			np := Add(p, DirDelta[dir])
+			if grid.IsWall(np) {
+				continue
+			}
+			ni := np.Y*W + np.X
+			if dist[ni] != Unreachable || (occupied != nil && occupied.Has(np)) {
+				continue
+			}
+			dist[ni] = d + 1
+			q = append(q, np)
+		}
+	}
+	state.DistQ = q
+	return count, dist
+}
+
 func validDirs(facing Direction) ([4]Direction, int) {
 	if facing == DirNone {
 		return [4]Direction{DirUp, DirRight, DirDown, DirLeft}, 4
@@ -1365,7 +1420,7 @@ func hasFollowupEscape(body []Point, facing Direction, sources, occupied *BitGri
 	return false
 }
 
-func pathBFS(body []Point, facing Direction, sources []Point,
+func cmdBFS(body []Point, facing Direction, sources []Point,
 	maxDepth int, dirInfo map[Direction]*DirInfo, enemyDists []int,
 	srcBG, occupied *BitGrid, deadline time.Time) SearchResult {
 
@@ -1373,11 +1428,20 @@ func pathBFS(body []Point, facing Direction, sources []Point,
 		return SearchResult{}
 	}
 
+	appleIdx := make(map[Point]int, len(sources))
+	for i, s := range sources {
+		if i >= 64 {
+			break
+		}
+		appleIdx[s] = i
+	}
+
 	type qItem struct {
-		body  []Point
-		face  Direction
-		first Direction
-		depth int
+		body     []Point
+		face     Direction
+		first    Direction
+		depth    int
+		eatenSet uint64
 	}
 
 	startBody := make([]Point, len(body))
@@ -1397,7 +1461,21 @@ func pathBFS(body []Point, facing Direction, sources []Point,
 		if iters&255 == 0 && time.Now().After(deadline) {
 			break
 		}
+
 		head := item.body[0]
+
+		var restored []Point
+		if item.eatenSet != 0 {
+			for s, idx := range appleIdx {
+				if item.eatenSet&(1<<uint(idx)) != 0 {
+					if srcBG.Has(s) {
+						srcBG.Clear(s)
+						restored = append(restored, s)
+					}
+				}
+			}
+		}
+
 		for _, dir := range state.VMoves(head, item.face) {
 			nb, nf, alive, ate, eatenAt := simMove(item.body, item.face, dir, srcBG, occupied)
 			if !alive {
@@ -1407,10 +1485,16 @@ func pathBFS(body []Point, facing Direction, sources []Point,
 			if first == DirNone {
 				first = dir
 			}
+
+			newEaten := item.eatenSet
 			if ate && srcBG.Has(eatenAt) {
 				if !hasFollowupEscape(nb, nf, srcBG, occupied, eatenAt) {
 					continue
 				}
+				if idx, ok := appleIdx[eatenAt]; ok {
+					newEaten |= 1 << uint(idx)
+				}
+
 				rawSteps := item.depth + 1
 				score := rawSteps * 1000
 				score += srcScore(body[0], eatenAt)
@@ -1439,6 +1523,13 @@ func pathBFS(body []Point, facing Direction, sources []Point,
 				if !best.ok || cand.score < best.score {
 					best = cand
 				}
+				h := stateHash(nf, nb)
+				if !seen[h] {
+					seen[h] = true
+					cp := make([]Point, len(nb))
+					copy(cp, nb)
+					queue = append(queue, qItem{body: cp, face: nf, first: first, depth: item.depth + 1, eatenSet: newEaten})
+				}
 				continue
 			}
 			if best.ok && item.depth+1 >= best.steps {
@@ -1451,7 +1542,11 @@ func pathBFS(body []Point, facing Direction, sources []Point,
 			seen[h] = true
 			cp := make([]Point, len(nb))
 			copy(cp, nb)
-			queue = append(queue, qItem{body: cp, face: nf, first: first, depth: item.depth + 1})
+			queue = append(queue, qItem{body: cp, face: nf, first: first, depth: item.depth + 1, eatenSet: newEaten})
+		}
+
+		for _, s := range restored {
+			srcBG.Set(s)
 		}
 	}
 	return best
@@ -1688,7 +1783,7 @@ func calcEnemyDist(enemies []enemyInfo, allOcc *BitGrid) []int {
 	}
 	for _, e := range enemies {
 		blocked := occExcept(allOcc, e.body)
-		_, eDists := floodDist(e.head, &blocked)
+		_, eDists := cmdFlood(e.body, e.facing, &blocked)
 		for i, d := range eDists {
 			if d < result[i] {
 				result[i] = d
@@ -1696,6 +1791,35 @@ func calcEnemyDist(enemies []enemyInfo, allOcc *BitGrid) []int {
 		}
 	}
 	return result
+}
+
+func predictEnemyWalls(enemies []enemyInfo, sources []Point, allOcc *BitGrid) BitGrid {
+	walls := NewBG(W, H)
+	for _, e := range enemies {
+		for _, p := range e.body {
+			walls.Set(p)
+		}
+		bestDir := e.facing
+		bestDist := Unreachable
+		dirs, nd := validDirs(e.facing)
+		for _, dir := range dirs[:nd] {
+			nh := Add(e.head, DirDelta[dir])
+			if grid.IsWall(nh) || allOcc.Has(nh) {
+				continue
+			}
+			for _, s := range sources {
+				if d := MDist(nh, s); d < bestDist {
+					bestDist = d
+					bestDir = dir
+				}
+			}
+		}
+		predicted := Add(e.head, DirDelta[bestDir])
+		if !grid.IsWall(predicted) {
+			walls.Set(predicted)
+		}
+	}
+	return walls
 }
 
 func filtSrc(sources []Point, myDists, enemyDists []int) []Point {
@@ -1955,6 +2079,7 @@ func main() {
 		}
 		turnDeadline := time.Now().Add(budget)
 
+		enemyWalls := predictEnemyWalls(enemies, sources, &allOcc)
 		eDanger := NewBG(W, H)
 		for _, e := range enemies {
 			ed, edn := validDirs(e.facing)
@@ -1965,28 +2090,42 @@ func main() {
 
 		enemyDists := calcEnemyDist(enemies, &allOcc)
 
-		sort.Slice(mine, func(i, j int) bool {
-			di, dj := Unreachable, Unreachable
-			for _, s := range sources {
-				if d := MDist(mine[i].body[0], s); d < di {
-					di = d
-				}
-				if d := MDist(mine[j].body[0], s); d < dj {
-					dj = d
-				}
-			}
-			if di != dj {
-				return di < dj
-			}
-			return mine[i].id < mine[j].id
-		})
-
-		vsrc := make([][]Point, len(mine))
-		botDists := make([][]int, len(mine))
+		type sortEntry struct {
+			idx     int
+			minDist int
+		}
+		sortKeys := make([]sortEntry, len(mine))
+		tmpDists := make([][]int, len(mine))
 		for i, bot := range mine {
 			occ := occExcept(&allOcc, bot.body)
-			_, botDists[i] = floodDist(bot.body[0], &occ)
+			for j := range occ.Bits {
+				occ.Bits[j] |= enemyWalls.Bits[j]
+			}
+			f := bodyFacing(bot.body)
+			_, tmpDists[i] = cmdFlood(bot.body, f, &occ)
+			md := Unreachable
+			for _, s := range sources {
+				if d := tmpDists[i][s.Y*W+s.X]; d < md {
+					md = d
+				}
+			}
+			sortKeys[i] = sortEntry{idx: i, minDist: md}
 		}
+		sort.Slice(sortKeys, func(i, j int) bool {
+			if sortKeys[i].minDist != sortKeys[j].minDist {
+				return sortKeys[i].minDist < sortKeys[j].minDist
+			}
+			return mine[sortKeys[i].idx].id < mine[sortKeys[j].idx].id
+		})
+		sortedMine := make([]botEntry, len(mine))
+		botDists := make([][]int, len(mine))
+		for i, sk := range sortKeys {
+			sortedMine[i] = mine[sk.idx]
+			botDists[i] = tmpDists[sk.idx]
+		}
+		mine = sortedMine
+
+		vsrc := make([][]Point, len(mine))
 		for _, s := range sources {
 			si := s.Y*W + s.X
 			bestBot := -1
@@ -2016,11 +2155,12 @@ func main() {
 			otherOcc := occExcept(&allOcc, body)
 			for i := range otherOcc.Bits {
 				otherOcc.Bits[i] |= plannedHeads.Bits[i]
+				otherOcc.Bits[i] |= enemyWalls.Bits[i]
 			}
 
 			dirInfo := calcDirInfo(body, facing, &otherOcc)
 
-			_, myDists := floodDist(head, &otherOcc)
+			_, myDists := cmdFlood(body, facing, &otherOcc)
 
 			srcBG := NewBG(W, H)
 			fillBG(&srcBG, sources)
@@ -2074,7 +2214,7 @@ func main() {
 					maxDepth = 6
 				}
 
-				plan = pathBFS(body, facing, competitive, maxDepth, dirInfo, enemyDists, &srcBG, &otherOcc, turnDeadline)
+				plan = cmdBFS(body, facing, competitive, maxDepth, dirInfo, enemyDists, &srcBG, &otherOcc, turnDeadline)
 				if plan.ok {
 					planReason = "bfs"
 				}
@@ -2154,20 +2294,59 @@ func main() {
 
 		refinePlansWithOneTurnSafety(&rsc, mine, enemies, sources, plans, turnDeadline)
 
-		var actions []string
-		var marks []Point
-		for _, plan := range plans {
-			if plan.ok {
-				marks = append(marks, plan.target)
+		// Final guard: never emit a move that sends head into neck (body[1]).
+		for i := range plans {
+			body := plans[i].body
+			if len(body) < 2 {
+				continue
 			}
+			neck := body[1]
+			nextHead := Add(body[0], DirDelta[plans[i].dir])
+			if nextHead == neck {
+				// Pick any other direction that doesn't go into neck or wall.
+				replaced := false
+				for d := DirUp; d <= DirLeft; d++ {
+					if d == plans[i].dir {
+						continue
+					}
+					alt := Add(body[0], DirDelta[d])
+					if alt == neck {
+						continue
+					}
+					if !grid.IsWall(alt) {
+						plans[i].dir = d
+						plans[i].reason = "fix"
+						replaced = true
+						break
+					}
+				}
+				if !replaced {
+					// All directions blocked — pick anything that isn't neck.
+					for d := DirUp; d <= DirLeft; d++ {
+						alt := Add(body[0], DirDelta[d])
+						if alt != neck {
+							plans[i].dir = d
+							plans[i].reason = "fix"
+							break
+						}
+					}
+				}
+			}
+		}
+
+		var actions []string
+		for _, plan := range plans {
 			actions = append(actions, actionString(plan.id, plan.dir, plan.reason))
 		}
 
-		for i, m := range marks {
-			if i >= 4 {
-				break
+		if debug {
+			n := 0
+			for _, plan := range plans {
+				if plan.ok && plan.target.X >= 0 && plan.target.Y >= 0 && n < 4 {
+					actions = append(actions, fmt.Sprintf("MARK %d %d", plan.target.X, plan.target.Y))
+					n++
+				}
 			}
-			actions = append(actions, fmt.Sprintf("MARK %d %d", m.X, m.Y))
 		}
 
 		out := "WAIT"
