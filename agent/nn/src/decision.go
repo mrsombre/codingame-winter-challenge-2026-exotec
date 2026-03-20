@@ -6,25 +6,22 @@ import (
 	"strings"
 )
 
-const cropRadius = 2
-
 type Candidate struct {
-	Legal        bool
-	Dir          int
-	Score        float32
-	Head         int
-	Body         []int
-	Eating       bool
-	Supported    bool
+	Legal       bool
+	Dir         int
+	Score       float32
+	Head        int
+	Body        []int
+	Eating      bool
+	Supported   bool
 	FallDistance int
-	Flood        int
-	SafeMoves    int
-	WallAdj      int
-	BlockedAdj   int
-	HeadOnRisk   bool
-	HeadOnWin    bool
-	RaceDelta    int
-	Features     [featureCount]float32
+	Flood       int
+	SafeMoves   int
+	WallAdj     int
+	BlockedAdj  int
+	HeadOnRisk  bool
+	HeadOnWin   bool
+	RaceDelta   int
 }
 
 type Decision struct {
@@ -99,28 +96,88 @@ func (d *Decision) collectMySnakes() {
 }
 
 func (d *Decision) bestDir(snIdx int, slot int) int {
-	bestDir := -1
-	bestScore := float32(-1e9)
-	bestHeuristic := float32(-1e9)
 	sn := &d.G.Sn[snIdx]
+
+	// 1. Evaluate all 4 candidate directions (legality + safety signals)
 	for dir := 0; dir < 4; dir++ {
 		cand := d.simulateCandidate(snIdx, dir)
 		d.Candidates[slot][dir] = cand
+	}
+
+	// 2. BFS from head for apple scoring
+	blocked := d.buildBlocked(snIdx, sn.Body[:sn.Len])
+	floodCount, headDists := d.floodDist(sn.Body[0], blocked)
+
+	// 3. Score all apples with NN, pick best target
+	targetApple := -1
+	bestAppleScore := float32(-1e9)
+	if d.M.Trained {
+		var feats [featureCount]float32
+		for _, ap := range d.G.Ap {
+			d.fillAppleFeatures(&feats, snIdx, ap, sn.Body[0], floodCount, headDists)
+			score := d.M.Score(feats[:])
+			if score > bestAppleScore {
+				bestAppleScore = score
+				targetApple = ap
+			}
+		}
+	}
+
+	// Fallback: nearest reachable apple
+	if targetApple < 0 {
+		bestDist := 1 << 30
+		for _, ap := range d.G.Ap {
+			if headDists[ap] >= 0 && headDists[ap] < bestDist {
+				bestDist = headDists[ap]
+				targetApple = ap
+			}
+		}
+	}
+
+	// 4. BFS from target apple for direction finding
+	var appleDists []int
+	if targetApple >= 0 {
+		_, appleDists = d.floodDist(targetApple, blocked)
+	}
+
+	// 5. Pick best direction: closest to target + safety
+	bestDir := -1
+	bestMetric := float32(-1e9)
+	for dir := 0; dir < 4; dir++ {
+		cand := &d.Candidates[slot][dir]
 		if !cand.Legal {
 			continue
 		}
-		score := d.M.Score(cand.Features[:])
-		if !d.M.Trained {
-			score = heuristicScore(cand.Features[:])
+
+		metric := float32(0)
+
+		// Distance to target apple
+		if targetApple >= 0 && appleDists != nil {
+			if appleDists[cand.Head] >= 0 {
+				metric -= float32(appleDists[cand.Head]) / 75
+			} else {
+				ax, ay := d.G.XY(targetApple)
+				cx, cy := d.G.XY(cand.Head)
+				metric -= float32(abs(ax-cx)+abs(ay-cy)) / 75
+			}
 		}
-		d.Candidates[slot][dir].Score = score
-		heur := heuristicScore(cand.Features[:])
-		if bestDir == -1 || score > bestScore || (score == bestScore && heur > bestHeuristic) {
+
+		// Safety signals
+		metric += float32(cand.Flood) / float32(MaxCells)
+		metric += float32(cand.SafeMoves) / 3
+		metric += boolf(cand.Eating) * 3
+		metric += boolf(cand.Supported) * 0.1
+		metric -= float32(cand.FallDistance) / float32(MaxH)
+		metric -= boolf(cand.HeadOnRisk) * 2
+		metric += boolf(cand.HeadOnWin)
+
+		cand.Score = metric
+		if metric > bestMetric {
+			bestMetric = metric
 			bestDir = dir
-			bestScore = score
-			bestHeuristic = heur
 		}
 	}
+
 	if bestDir >= 0 {
 		return bestDir
 	}
@@ -131,6 +188,74 @@ func (d *Decision) bestDir(snIdx int, slot int) int {
 		return dir
 	}
 	return sn.Dir
+}
+
+// fillAppleFeatures computes 16 features for a (snake, apple) pair.
+// Must match apple_features_for_snake in common.py exactly.
+func (d *Decision) fillAppleFeatures(f *[featureCount]float32, snIdx int, apple int, head int, floodCount int, dists []int) {
+	g := d.G
+	hx, hy := g.XY(head)
+	ax, ay := g.XY(apple)
+
+	bfsDist := dists[apple]
+	if bfsDist < 0 {
+		bfsDist = abs(ax-hx) + abs(ay-hy) + g.W + g.H
+	}
+	enemyDist := d.enemyAppleDist(snIdx, apple)
+	race := bfsDist - enemyDist
+
+	myTotal, opTotal := 0, 0
+	for i := 0; i < g.SNum; i++ {
+		sn := &g.Sn[i]
+		if !sn.Alive {
+			continue
+		}
+		if sn.Owner == 0 {
+			myTotal += sn.Len
+		} else {
+			opTotal += sn.Len
+		}
+	}
+	snakeLen := g.Sn[snIdx].Len
+	friendlyDist := d.nearestFriendlyDist(snIdx, apple)
+
+	f[0] = clampf(float32(bfsDist)/75, 0, 1)
+	f[1] = clampf(float32(enemyDist)/75, 0, 1)
+	f[2] = clampf(float32(race)/75, -1, 1)
+	f[3] = float32(ax-hx) / float32(MaxW)
+	f[4] = float32(ay-hy) / float32(MaxH)
+	f[5] = float32(snakeLen) / float32(MaxSeg)
+	f[6] = float32(g.TurnNum) / float32(MaxTurns)
+	f[7] = float32(g.ANum) / float32(MaxAp)
+	f[8] = float32(myTotal) / 128
+	f[9] = float32(opTotal) / 128
+	f[10] = float32(g.W) / float32(MaxW)
+	f[11] = float32(g.H) / float32(MaxH)
+	if dists[apple] >= 0 {
+		f[12] = 1
+	} else {
+		f[12] = 0
+	}
+	f[13] = float32(floodCount) / float32(MaxCells)
+	f[14] = float32(ay) / float32(MaxH)
+	f[15] = clampf(float32(friendlyDist)/75, 0, 1)
+}
+
+func (d *Decision) nearestFriendlyDist(snIdx int, apple int) int {
+	ax, ay := d.G.XY(apple)
+	best := 75
+	for i := 0; i < d.G.SNum; i++ {
+		sn := &d.G.Sn[i]
+		if !sn.Alive || i == snIdx || sn.Owner != 0 || sn.Len == 0 || !d.G.IsInGrid(sn.Body[0]) {
+			continue
+		}
+		fx, fy := d.G.XY(sn.Body[0])
+		dist := abs(ax-fx) + abs(ay-fy)
+		if dist < best {
+			best = dist
+		}
+	}
+	return best
 }
 
 func (d *Decision) resolveFriendlyConflicts() {
@@ -246,7 +371,7 @@ func (d *Decision) simulateCandidate(snIdx int, dir int) Candidate {
 	cand.Eating = eating
 	cand.Supported = supported
 	cand.FallDistance = fallDistance
-	d.fillFeatures(snIdx, &cand)
+	d.populateCandidateSignals(snIdx, &cand)
 	return cand
 }
 
@@ -269,123 +394,6 @@ func (d *Decision) isSupported(body []int, snIdx int, eatenApple int) bool {
 		}
 	}
 	return false
-}
-
-func (d *Decision) fillFeatures(snIdx int, cand *Candidate) {
-	if !cand.Legal {
-		return
-	}
-	used := 0
-	hx, hy := d.G.XY(cand.Head)
-	localOcc := make(map[int]bool, len(cand.Body))
-	for _, cell := range cand.Body {
-		localOcc[cell] = true
-	}
-
-	for ry := -cropRadius; ry <= cropRadius; ry++ {
-		for rx := -cropRadius; rx <= cropRadius; rx++ {
-			wx, wy := rotateOffset(rx, ry, cand.Dir)
-			tx, ty := hx+wx, hy+wy
-			wall, apple, occ := float32(0), float32(0), float32(0)
-			if !d.G.InBounds(tx, ty) {
-				wall = 1
-			} else {
-				cell := d.G.Idx(tx, ty)
-				if !d.G.Cell[cell] {
-					wall = 1
-				}
-				if d.appleSet[cell] && !(cand.Eating && cell == cand.Head) {
-					apple = 1
-				}
-				if localOcc[cell] || (d.occupiedBy[cell] >= 0 && d.occupiedBy[cell] != snIdx) {
-					occ = 1
-				}
-			}
-			cand.Features[used] = wall
-			cand.Features[used+1] = apple
-			cand.Features[used+2] = occ
-			used += 3
-		}
-	}
-
-	myTotal, opTotal := 0, 0
-	for i := 0; i < d.G.SNum; i++ {
-		sn := &d.G.Sn[i]
-		if !sn.Alive {
-			continue
-		}
-		if sn.Owner == 0 {
-			myTotal += sn.Len
-		} else {
-			opTotal += sn.Len
-		}
-	}
-
-	d.populateCandidateSignals(snIdx, cand)
-	targetDX, targetDY, targetDist := d.bestAppleTarget(snIdx, cand)
-	enemyDist := d.nearestEnemyDist(snIdx, cand.Head)
-
-	scalars := []float32{
-		float32(d.G.W) / float32(MaxW),
-		float32(d.G.H) / float32(MaxH),
-		float32(d.G.TurnNum) / float32(MaxTurns),
-		float32(d.G.ANum) / float32(MaxAp),
-		float32(myTotal) / 128,
-		float32(opTotal) / 128,
-		float32(len(cand.Body)) / float32(MaxSeg),
-		targetDX,
-		targetDY,
-		targetDist,
-		enemyDist,
-		boolf(cand.Supported),
-		float32(cand.FallDistance) / float32(MaxH),
-		boolf(cand.Eating),
-		float32(cand.Flood) / float32(MaxCells),
-		float32(cand.SafeMoves) / 3,
-		float32(cand.WallAdj) / 4,
-		boolf(cand.HeadOnRisk),
-		boolf(cand.HeadOnWin),
-		clampf(float32(cand.RaceDelta)/75, -1, 1),
-		float32(cand.BlockedAdj) / 4,
-	}
-	copy(cand.Features[used:], scalars)
-}
-
-func rotateOffset(x, y, dir int) (int, int) {
-	switch dir {
-	case DU:
-		return x, y
-	case DR:
-		return -y, x
-	case DD:
-		return -x, -y
-	case DL:
-		return y, -x
-	default:
-		return x, y
-	}
-}
-
-func (d *Decision) nearestEnemyDist(snIdx int, head int) float32 {
-	hx, hy := d.G.XY(head)
-	best := 1 << 30
-	for i := 0; i < d.G.SNum; i++ {
-		sn := &d.G.Sn[i]
-		if !sn.Alive || i == snIdx || sn.Owner == 0 || sn.Len == 0 {
-			continue
-		}
-		ex, ey := d.G.XY(sn.Body[0])
-		dx := ex - hx
-		dy := ey - hy
-		dist := abs(dx) + abs(dy)
-		if dist < best {
-			best = dist
-		}
-	}
-	if best == 1<<30 {
-		return 1
-	}
-	return float32(best) / 75
 }
 
 func (d *Decision) populateCandidateSignals(snIdx int, cand *Candidate) {
@@ -605,36 +613,6 @@ func (d *Decision) headOnSignals(snIdx int, cand *Candidate) (bool, bool) {
 		}
 	}
 	return risk, win
-}
-
-func (d *Decision) bestAppleTarget(snIdx int, cand *Candidate) (float32, float32, float32) {
-	blocked := d.buildBlocked(snIdx, cand.Body)
-	_, dists := d.floodDist(cand.Head, blocked)
-	hx, hy := d.G.XY(cand.Head)
-	bestCell := -1
-	bestOwn := 1 << 30
-	bestRace := 1 << 30
-	for _, ap := range d.G.Ap {
-		if cand.Eating && ap == cand.Head {
-			continue
-		}
-		ownDist := dists[ap]
-		if ownDist < 0 {
-			ax, ay := d.G.XY(ap)
-			ownDist = abs(ax-hx) + abs(ay-hy) + d.G.W + d.G.H
-		}
-		race := ownDist - d.enemyAppleDist(snIdx, ap)
-		if bestCell == -1 || ownDist < bestOwn || (ownDist == bestOwn && race < bestRace) {
-			bestCell = ap
-			bestOwn = ownDist
-			bestRace = race
-		}
-	}
-	if bestCell < 0 {
-		return 0, 0, 1
-	}
-	ax, ay := d.G.XY(bestCell)
-	return float32(ax-hx) / float32(MaxW), float32(ay-hy) / float32(MaxH), clampf(float32(bestOwn)/75, 0, 1)
 }
 
 func (d *Decision) bestRaceDelta(snIdx int, cand *Candidate, dists []int) int {

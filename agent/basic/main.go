@@ -1516,8 +1516,12 @@ func cmdBFS(body []Point, facing Direction, sources []Point,
 						score += 2000
 					}
 				}
-				if state.Terr.MinBodyLen(body, eatenAt) <= bodyLen {
-					score -= 200
+				if minLen := state.Terr.MinBodyLen(body, eatenAt); minLen <= bodyLen {
+					surplus := bodyLen - minLen
+					if surplus > 4 {
+						surplus = 4
+					}
+					score -= 50 + surplus*50
 				}
 				for _, s := range sources {
 					if s != eatenAt && MDist(eatenAt, s) <= 4 {
@@ -1620,6 +1624,9 @@ func bestAction(body []Point, facing Direction, sources []Point,
 		}
 
 		score := bestDist
+		if bodyLen >= 8 && bestDist < Unreachable {
+			score = bestDist / 2
+		}
 		if ate && srcBG.Has(eatenAt) {
 			score = -1000
 			bestTarget = eatenAt
@@ -1674,6 +1681,13 @@ func bestAction(body []Point, facing Direction, sources []Point,
 				score += 2000
 			} else if di.flood < bodyLen*2 {
 				score += 500
+			}
+			if bodyLen >= 8 {
+				spaceBonus := di.flood * 10 / bodyLen
+				if spaceBonus > 200 {
+					spaceBonus = 200
+				}
+				score -= spaceBonus
 			}
 		} else if di == nil {
 			score += 1500
@@ -2223,9 +2237,23 @@ func main() {
 				vsrc[bestBot] = append(vsrc[bestBot], s)
 			}
 		}
+		// Sort each bot's apples: prioritize by race margin minus distance penalty.
+		// margin = enemy_dist - our_dist (positive = we're closer)
+		// Penalty -dist/4 discourages chasing far uncontested apples over near ones.
+		for i := range vsrc {
+			bd := botDists[i]
+			sort.Slice(vsrc[i], func(a, b int) bool {
+				sa := vsrc[i][a].Y*W + vsrc[i][a].X
+				sb := vsrc[i][b].Y*W + vsrc[i][b].X
+				ma := (enemyDists[sa] - bd[sa]) - bd[sa]/4
+				mb := (enemyDists[sb] - bd[sb]) - bd[sb]/4
+				return ma > mb
+			})
+		}
 		supportJobs := planSupportJobs(mine, vsrc, sources, botDists, turnDeadline)
 
 		plans := make([]botPlan, 0, len(mine))
+		savedDirInfo := make([]map[Direction]*DirInfo, len(mine))
 		plannedHeads := NewBG(W, H)
 
 		for botIdx, bot := range mine {
@@ -2241,6 +2269,7 @@ func main() {
 			}
 
 			dirInfo := calcDirInfo(body, facing, &otherOcc)
+			savedDirInfo[botIdx] = dirInfo
 
 			_, myDists := cmdFlood(body, facing, &otherOcc)
 
@@ -2285,9 +2314,9 @@ func main() {
 			if !plan.ok {
 				fillBG(&srcBG, competitive)
 
-				maxDepth := 8
+				maxDepth := 16
 				if bodyLen <= 5 {
-					maxDepth = 12
+					maxDepth = 20
 				}
 				remaining := time.Until(turnDeadline)
 				if remaining < 15*time.Millisecond {
@@ -2399,6 +2428,95 @@ func main() {
 				plans = append(plans, botPlan{id: bot.id, body: append([]Point(nil), body...), facing: facing, dir: plan.dir, target: Add(head, DirDelta[plan.dir]), reason: planReason})
 			}
 			plannedHeads.Set(Add(head, DirDelta[plan.dir]))
+		}
+
+		// Joint move search: try all combinations of valid moves across bots.
+		// Pick the combo that maximizes total flood + eating with no friendly collisions.
+		if len(plans) >= 2 && time.Until(turnDeadline) > 5*time.Millisecond {
+			type jOpt struct {
+				dir   Direction
+				head  Point
+				flood int
+				eat   bool
+			}
+			srcBGJ := NewBG(W, H)
+			fillBG(&srcBGJ, sources)
+
+			botOpts := make([][]jOpt, len(plans))
+			for i, p := range plans {
+				di := savedDirInfo[i]
+				head := p.body[0]
+				for dir, info := range di {
+					if info == nil || !info.alive {
+						continue
+					}
+					nh := Add(head, DirDelta[dir])
+					botOpts[i] = append(botOpts[i], jOpt{
+						dir: dir, head: nh, flood: info.flood, eat: srcBGJ.Has(nh),
+					})
+				}
+				if len(botOpts[i]) == 0 {
+					botOpts[i] = []jOpt{{dir: p.dir, head: Add(head, DirDelta[p.dir])}}
+				}
+			}
+
+			// Enumerate all combos
+			combo := make([]int, len(plans))
+			bestScore := -1 << 30
+			bestDirs := make([]Direction, len(plans))
+			for i := range bestDirs {
+				bestDirs[i] = plans[i].dir
+			}
+
+			for {
+				score := 0
+				headCount := make(map[Point]int, len(plans))
+				for i := range plans {
+					opt := botOpts[i][combo[i]]
+					// Strong preference for keeping individual plan
+					if opt.dir == plans[i].dir {
+						score += 10000
+					}
+					score += opt.flood
+					if opt.eat {
+						score += 5000
+					}
+					headCount[opt.head]++
+				}
+				for _, cnt := range headCount {
+					if cnt > 1 {
+						score -= cnt * 20000
+					}
+				}
+
+				if score > bestScore {
+					bestScore = score
+					for i := range plans {
+						bestDirs[i] = botOpts[i][combo[i]].dir
+					}
+				}
+
+				// Increment combo (odometer)
+				carry := true
+				for i := len(plans) - 1; i >= 0 && carry; i-- {
+					combo[i]++
+					if combo[i] < len(botOpts[i]) {
+						carry = false
+					} else {
+						combo[i] = 0
+					}
+				}
+				if carry {
+					break
+				}
+			}
+
+			for i := range plans {
+				if plans[i].dir != bestDirs[i] {
+					plans[i].dir = bestDirs[i]
+					plans[i].reason = "joint"
+				}
+			}
 		}
 
 		refinePlansWithOneTurnSafety(&rsc, mine, enemies, sources, plans, turnDeadline)

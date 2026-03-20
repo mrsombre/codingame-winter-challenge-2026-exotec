@@ -1516,8 +1516,17 @@ func cmdBFS(body []Point, facing Direction, sources []Point,
 						score += 2000
 					}
 				}
-				if state.Terr.MinBodyLen(body, eatenAt) <= bodyLen {
-					score -= 200
+				if minLen := state.Terr.MinBodyLen(body, eatenAt); minLen <= bodyLen {
+					surplus := bodyLen - minLen
+					if surplus > 4 {
+						surplus = 4
+					}
+					score -= 50 + surplus*50
+				}
+				for _, s := range sources {
+					if s != eatenAt && MDist(eatenAt, s) <= 4 {
+						score -= 100
+					}
 				}
 				cand := SearchResult{dir: first, target: eatenAt, steps: rawSteps, score: score, ok: true}
 				if !best.ok || cand.score < best.score {
@@ -1615,6 +1624,9 @@ func bestAction(body []Point, facing Direction, sources []Point,
 		}
 
 		score := bestDist
+		if bodyLen >= 8 && bestDist < Unreachable {
+			score = bestDist / 2
+		}
 		if ate && srcBG.Has(eatenAt) {
 			score = -1000
 			bestTarget = eatenAt
@@ -1669,6 +1681,13 @@ func bestAction(body []Point, facing Direction, sources []Point,
 				score += 2000
 			} else if di.flood < bodyLen*2 {
 				score += 500
+			}
+			if bodyLen >= 8 {
+				spaceBonus := di.flood * 10 / bodyLen
+				if spaceBonus > 200 {
+					spaceBonus = 200
+				}
+				score -= spaceBonus
 			}
 		} else if di == nil {
 			score += 1500
@@ -2005,6 +2024,83 @@ func planSupportJobs(mine []botEntry, preferred [][]Point, sources []Point, botD
 	return jobs
 }
 
+// isHeadLockedWorstCase checks whether, after our bot moves in dir,
+// there exists ANY combination of enemy moves that leaves our bot
+// with zero valid follow-up moves (head locked).
+func isHeadLockedWorstCase(body []Point, facing, dir Direction, enemies []enemyInfo, otherOcc, srcBG *BitGrid) bool {
+	// Only check if an enemy head is within range 2 of our head
+	head := body[0]
+	newHead := Add(head, DirDelta[dir])
+	nearbyEnemies := make([]enemyInfo, 0, len(enemies))
+	for _, e := range enemies {
+		if MDist(newHead, e.head) <= 3 {
+			nearbyEnemies = append(nearbyEnemies, e)
+		}
+	}
+	if len(nearbyEnemies) == 0 {
+		return false
+	}
+
+	// Simulate our move
+	nb, nf, alive, _, _ := simMove(body, facing, dir, srcBG, otherOcc)
+	if !alive {
+		return true
+	}
+
+	// Build occupied grid: otherOcc + our new body
+	baseOcc := NewBG(W, H)
+	copy(baseOcc.Bits, otherOcc.Bits)
+	for _, p := range nb[1:] {
+		baseOcc.Set(p)
+	}
+
+	// Cap combos on nearby enemies only
+	combos := 1
+	for _, e := range nearbyEnemies {
+		_, nd := validDirs(e.facing)
+		combos *= nd
+		if combos > 27 {
+			return false
+		}
+	}
+
+	finalHead := nb[0]
+	eDirs := make([]Direction, len(nearbyEnemies))
+	testOcc := NewBG(W, H) // pre-allocate once
+	locked := false
+
+	var walk func(idx int)
+	walk = func(idx int) {
+		if locked {
+			return
+		}
+		if idx == len(nearbyEnemies) {
+			copy(testOcc.Bits, baseOcc.Bits)
+			for ei, e := range nearbyEnemies {
+				nh := Add(e.head, DirDelta[eDirs[ei]])
+				if !grid.IsWall(nh) {
+					testOcc.Set(nh)
+				}
+			}
+			for _, d := range state.VMoves(finalHead, nf) {
+				nh := Add(finalHead, DirDelta[d])
+				if !grid.IsWall(nh) && !testOcc.Has(nh) {
+					return
+				}
+			}
+			locked = true
+			return
+		}
+		dirs, nd := validDirs(nearbyEnemies[idx].facing)
+		for di := 0; di < nd; di++ {
+			eDirs[idx] = dirs[di]
+			walk(idx + 1)
+		}
+	}
+	walk(0)
+	return locked
+}
+
 func main() {
 	scanner = bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 1<<20), 1<<20)
@@ -2140,6 +2236,19 @@ func main() {
 			if bestBot >= 0 {
 				vsrc[bestBot] = append(vsrc[bestBot], s)
 			}
+		}
+		// Sort each bot's apples: prioritize by race margin minus distance penalty.
+		// margin = enemy_dist - our_dist (positive = we're closer)
+		// Penalty -dist/4 discourages chasing far uncontested apples over near ones.
+		for i := range vsrc {
+			bd := botDists[i]
+			sort.Slice(vsrc[i], func(a, b int) bool {
+				sa := vsrc[i][a].Y*W + vsrc[i][a].X
+				sb := vsrc[i][b].Y*W + vsrc[i][b].X
+				ma := (enemyDists[sa] - bd[sa]) - bd[sa]/4
+				mb := (enemyDists[sb] - bd[sb]) - bd[sb]/4
+				return ma > mb
+			})
 		}
 		supportJobs := planSupportJobs(mine, vsrc, sources, botDists, turnDeadline)
 
@@ -2282,6 +2391,33 @@ func main() {
 						}
 					}
 				}
+			}
+
+			// Head-lock rejection for long snakes: reject any move where
+			// an enemy combo can leave us with zero valid follow-up moves.
+			if bodyLen >= 6 && isHeadLockedWorstCase(body, facing, plan.dir, enemies, &otherOcc, &srcBG) {
+				replaced := false
+				bestFlood := -1
+				vd, nd := validDirs(facing)
+				for _, d := range vd[:nd] {
+					if d == plan.dir {
+						continue
+					}
+					di := dirInfo[d]
+					if di == nil || !di.alive {
+						continue
+					}
+					if isHeadLockedWorstCase(body, facing, d, enemies, &otherOcc, &srcBG) {
+						continue
+					}
+					if di.flood > bestFlood {
+						bestFlood = di.flood
+						plan.dir = d
+						planReason = "nolock"
+						replaced = true
+					}
+				}
+				_ = replaced
 			}
 
 			if plan.ok {

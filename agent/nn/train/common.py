@@ -25,6 +25,9 @@ FEATURE_COUNT = 96
 CROP_RADIUS = 2
 FEATURE_SCHEMA_VERSION = 2
 
+APPLE_FEATURE_COUNT = 16
+APPLE_FEATURE_SCHEMA_VERSION = 3
+
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
@@ -620,7 +623,64 @@ def pack_int4(values: List[int]) -> bytes:
     return bytes(data)
 
 
-def emit_go_weights(params: List[List[float]], out_path: Path) -> dict:
+def nearest_friendly_dist(state: dict, sn_index: int, apple_cell: int) -> float:
+    """Manhattan distance from nearest friendly snake (other than sn_index) to apple."""
+    width = state["width"]
+    ax, ay = xy(apple_cell, width)
+    best = 75.0
+    for i, snake in enumerate(state["snakes"]):
+        if i == sn_index or snake["owner"] != 0 or not snake["body"]:
+            continue
+        if snake["body"][0] < 0:
+            continue
+        fx, fy = xy(snake["body"][0], width)
+        dist = abs(ax - fx) + abs(ay - fy)
+        if dist < best:
+            best = dist
+    return best
+
+
+def apple_features_for_snake(
+    state: dict, sn_index: int, apple_cell: int, head: int, flood_count: int, dists: List[int]
+) -> List[float]:
+    """16 features for a (snake, apple) pair."""
+    width = state["width"]
+    height = state["height"]
+    hx, hy = xy(head, width)
+    ax, ay = xy(apple_cell, width)
+
+    bfs_d = dists[apple_cell]
+    if bfs_d < 0:
+        bfs_d = abs(ax - hx) + abs(ay - hy) + width + height
+    enemy_d = enemy_apple_dist(state, sn_index, apple_cell)
+    race = bfs_d - enemy_d
+
+    my_total = sum(len(sn["body"]) for sn in state["snakes"] if sn["owner"] == 0)
+    op_total = sum(len(sn["body"]) for sn in state["snakes"] if sn["owner"] == 1)
+    snake_len = len(state["snakes"][sn_index]["body"])
+    friendly_d = nearest_friendly_dist(state, sn_index, apple_cell)
+
+    return [
+        min(1.0, bfs_d / 75.0),
+        min(1.0, enemy_d / 75.0),
+        max(-1.0, min(1.0, race / 75.0)),
+        (ax - hx) / MAX_W,
+        (ay - hy) / MAX_H,
+        snake_len / MAX_SEG,
+        state["turn"] / MAX_TURNS,
+        len(state["apples"]) / MAX_AP,
+        my_total / 128.0,
+        op_total / 128.0,
+        width / MAX_W,
+        height / MAX_H,
+        1.0 if dists[apple_cell] >= 0 else 0.0,
+        flood_count / (MAX_W * MAX_H),
+        ay / MAX_H,
+        min(1.0, friendly_d / 75.0),
+    ]
+
+
+def emit_go_weights(params: List[List[float]], out_path: Path, schema_version: int = FEATURE_SCHEMA_VERSION) -> dict:
     quantized = []
     scales = []
     for tensor in params:
@@ -632,7 +692,7 @@ def emit_go_weights(params: List[List[float]], out_path: Path) -> dict:
     content = [
         "package main",
         "",
-        f"const featureSchemaVersion = {FEATURE_SCHEMA_VERSION}",
+        f"const featureSchemaVersion = {schema_version}",
         "",
         "var modelTensorScales = [...]float32{",
     ]

@@ -71,6 +71,7 @@ type MatchResult struct {
 	MapWidth          int
 	MapHeight         int
 	Apples            int
+	ScoresAt20  [2]int
 	Swapped     bool
 	FinalBirds  []string // "id owner body" e.g. "0 0 5,7:6,7:6,8" or "0 0 dead"
 	FinalApples []string // "x y" per apple
@@ -106,6 +107,8 @@ func (r MatchResult) Metrics() []Metric {
 		{Label: "loss_bad_command_p1", Value: lossMetric(r.LossReasons[1], LossReasonBadCommand)},
 		{Label: "score_p0", Value: float64(r.Scores[0])},
 		{Label: "score_p1", Value: float64(r.Scores[1])},
+		{Label: "score_t20_p0", Value: float64(r.ScoresAt20[0])},
+		{Label: "score_t20_p1", Value: float64(r.ScoresAt20[1])},
 		{Label: "segments_lost_p0", Value: float64(r.SegmentsLost[0])},
 		{Label: "segments_lost_p1", Value: float64(r.SegmentsLost[1])},
 		{Label: "bots_lost_p0", Value: float64(r.BotsLost[0])},
@@ -129,6 +132,8 @@ func (r MatchResult) RenderMatch() string {
 		LossReasonP1        LossReason  `json:"loss_reason_p1"`
 		ScoreP0             int         `json:"score_p0"`
 		ScoreP1             int         `json:"score_p1"`
+		ScoreT20P0          int         `json:"score_t20_p0"`
+		ScoreT20P1          int         `json:"score_t20_p1"`
 		SegmentsLostP0      int         `json:"segments_lost_p0"`
 		SegmentsLostP1      int         `json:"segments_lost_p1"`
 		BotsLostP0          int         `json:"bots_lost_p0"`
@@ -154,6 +159,8 @@ func (r MatchResult) RenderMatch() string {
 		LossReasonP1:        r.LossReasons[1],
 		ScoreP0:             r.Scores[0],
 		ScoreP1:             r.Scores[1],
+		ScoreT20P0:          r.ScoresAt20[0],
+		ScoreT20P1:          r.ScoresAt20[1],
 		SegmentsLostP0:      r.SegmentsLost[0],
 		SegmentsLostP1:      r.SegmentsLost[1],
 		BotsLostP0:          r.BotsLost[0],
@@ -224,6 +231,7 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 	maxTurns := runner.Options.MaxTurns
 	turn := 0
 	var badCommands []BadCommandInfo
+	var scoresAt20 [2]int
 	traceRows := make([]TraceTurn, 0, maxTurns)
 	for turn = 0; !referee.Ended() && turn < maxTurns; turn++ {
 		referee.ResetGameTurnData()
@@ -286,6 +294,15 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 		}
 
 		referee.PerformGameUpdate(turn)
+		if turn == 19 { // 0-indexed, so turn 19 = game turn 20
+			for i, p := range players {
+				for _, b := range p.GetBirds() {
+					if b.Alive {
+						scoresAt20[i] += len(b.Body)
+					}
+				}
+			}
+		}
 		if runner.Options.Debug {
 			printDebugTurnState("after", turn, game)
 		}
@@ -297,6 +314,7 @@ func (runner *Runner) RunMatch(simulationID int, seed int64) MatchResult {
 	referee.OnEnd()
 
 	result := buildMatchResult(simulationID, seed, turn, referee.Game, players, controllers)
+	result.ScoresAt20 = scoresAt20
 	result.BadCommands = badCommands
 	if swapSides {
 		result = swapMatchSides(result)
@@ -454,6 +472,7 @@ func liveBirdCount(player *engine.Player) int {
 // the original --p0-bin / --p1-bin regardless of engine-side assignment.
 func swapMatchSides(r MatchResult) MatchResult {
 	r.Scores[0], r.Scores[1] = r.Scores[1], r.Scores[0]
+	r.ScoresAt20[0], r.ScoresAt20[1] = r.ScoresAt20[1], r.ScoresAt20[0]
 	r.Losses[0], r.Losses[1] = r.Losses[1], r.Losses[0]
 	r.SegmentsLost[0], r.SegmentsLost[1] = r.SegmentsLost[1], r.SegmentsLost[0]
 	r.BotsLost[0], r.BotsLost[1] = r.BotsLost[1], r.BotsLost[0]
