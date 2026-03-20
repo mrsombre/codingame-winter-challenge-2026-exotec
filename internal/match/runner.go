@@ -71,7 +71,9 @@ type MatchResult struct {
 	MapWidth          int
 	MapHeight         int
 	Apples            int
-	Swapped           bool
+	Swapped     bool
+	FinalBirds  []string // "id owner body" e.g. "0 0 5,7:6,7:6,8" or "0 0 dead"
+	FinalApples []string // "x y" per apple
 }
 
 func (r MatchResult) SimulationID() int { return r.ID }
@@ -119,28 +121,30 @@ func (r MatchResult) Metrics() []Metric {
 
 func (r MatchResult) RenderMatch() string {
 	payload := struct {
-		ID                  int        `json:"id"`
-		Seed                int64      `json:"seed"`
-		Turns               int        `json:"turns"`
-		Winner              int        `json:"winner"`
-		LossReasonP0        LossReason `json:"loss_reason_p0"`
-		LossReasonP1        LossReason `json:"loss_reason_p1"`
-		ScoreP0             int        `json:"score_p0"`
-		ScoreP1             int        `json:"score_p1"`
-		SegmentsLostP0      int        `json:"segments_lost_p0"`
-		SegmentsLostP1      int        `json:"segments_lost_p1"`
-		BotsLostP0          int        `json:"bots_lost_p0"`
-		BotsLostP1          int        `json:"bots_lost_p1"`
-		TimeToFirstAnswerP0 float64    `json:"time_to_first_answer_p0"`
-		TimeToFirstAnswerP1 float64    `json:"time_to_first_answer_p1"`
-		TimeToTurnP99P0     float64    `json:"time_to_turn_p99_p0"`
-		TimeToTurnP99P1     float64    `json:"time_to_turn_p99_p1"`
-		TimeToTurnMaxP0     float64    `json:"time_to_turn_max_p0"`
-		TimeToTurnMaxP1     float64    `json:"time_to_turn_max_p1"`
-		BirdsPerPlayer      int        `json:"birds_per_player"`
-		MapWidth            int        `json:"map_width"`
-		MapHeight           int        `json:"map_height"`
-		Apples              int        `json:"apples"`
+		ID                  int         `json:"id"`
+		Seed                int64       `json:"seed"`
+		Turns               int         `json:"turns"`
+		Winner              int         `json:"winner"`
+		LossReasonP0        LossReason  `json:"loss_reason_p0"`
+		LossReasonP1        LossReason  `json:"loss_reason_p1"`
+		ScoreP0             int         `json:"score_p0"`
+		ScoreP1             int         `json:"score_p1"`
+		SegmentsLostP0      int         `json:"segments_lost_p0"`
+		SegmentsLostP1      int         `json:"segments_lost_p1"`
+		BotsLostP0          int         `json:"bots_lost_p0"`
+		BotsLostP1          int         `json:"bots_lost_p1"`
+		TimeToFirstAnswerP0 float64     `json:"time_to_first_answer_p0"`
+		TimeToFirstAnswerP1 float64     `json:"time_to_first_answer_p1"`
+		TimeToTurnP99P0     float64     `json:"time_to_turn_p99_p0"`
+		TimeToTurnP99P1     float64     `json:"time_to_turn_p99_p1"`
+		TimeToTurnMaxP0     float64     `json:"time_to_turn_max_p0"`
+		TimeToTurnMaxP1     float64     `json:"time_to_turn_max_p1"`
+		BirdsPerPlayer      int         `json:"birds_per_player"`
+		MapWidth            int         `json:"map_width"`
+		MapHeight           int         `json:"map_height"`
+		Apples              int         `json:"apples"`
+		FinalBirds  []string `json:"final_birds"`
+		FinalApples []string `json:"final_apples"`
 	}{
 		ID:                  r.ID,
 		Seed:                r.Seed,
@@ -164,6 +168,8 @@ func (r MatchResult) RenderMatch() string {
 		MapWidth:            r.MapWidth,
 		MapHeight:           r.MapHeight,
 		Apples:              r.Apples,
+		FinalBirds:          r.FinalBirds,
+		FinalApples:         r.FinalApples,
 	}
 
 	data, err := json.Marshal(payload)
@@ -376,6 +382,27 @@ func buildMatchResult(simulationID int, seed int64, turns int, game *engine.Game
 		turnMax[i] = stats.TurnMax
 	}
 
+	// Capture final bird states as strings: "id owner body" or "id owner dead".
+	var finalBirds []string
+	for pi, player := range players {
+		for _, bird := range player.GetBirds() {
+			if !bird.Alive {
+				finalBirds = append(finalBirds, fmt.Sprintf("%d %d dead", bird.ID, pi))
+				continue
+			}
+			parts := make([]string, len(bird.Body))
+			for i, c := range bird.Body {
+				parts[i] = fmt.Sprintf("%d,%d", c.X, c.Y)
+			}
+			finalBirds = append(finalBirds, fmt.Sprintf("%d %d %s", bird.ID, pi, strings.Join(parts, ":")))
+		}
+	}
+	// Capture remaining apples as "x y".
+	var finalApples []string
+	for _, c := range game.Grid.Apples {
+		finalApples = append(finalApples, fmt.Sprintf("%d %d", c.X, c.Y))
+	}
+
 	return MatchResult{
 		ID:                simulationID,
 		Seed:              seed,
@@ -393,6 +420,8 @@ func buildMatchResult(simulationID int, seed int64, turns int, game *engine.Game
 		MapWidth:          game.Grid.Width,
 		MapHeight:         game.Grid.Height,
 		Apples:            len(game.Grid.Apples),
+		FinalBirds:        finalBirds,
+		FinalApples:       finalApples,
 	}
 }
 
@@ -434,6 +463,19 @@ func swapMatchSides(r MatchResult) MatchResult {
 	r.TimeToTurnMax[0], r.TimeToTurnMax[1] = r.TimeToTurnMax[1], r.TimeToTurnMax[0]
 	for i := range r.BadCommands {
 		r.BadCommands[i].Player = 1 - r.BadCommands[i].Player
+	}
+	for i, s := range r.FinalBirds {
+		// Swap owner digit: "id 0 body" -> "id 1 body"
+		var id int
+		var owner int
+		var rest string
+		fmt.Sscanf(s, "%d %d", &id, &owner)
+		idx := strings.IndexByte(s, ' ')
+		idx2 := strings.IndexByte(s[idx+1:], ' ')
+		if idx2 >= 0 {
+			rest = s[idx+1+idx2:]
+		}
+		r.FinalBirds[i] = fmt.Sprintf("%d %d%s", id, 1-owner, rest)
 	}
 	switch r.Winner {
 	case 0:
