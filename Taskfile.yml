@@ -32,11 +32,9 @@ tasks:
   build-agent:
     desc: Build an agent binary into ./bin/<logic>
     silent: true
-    deps:
-      - bundle-agent
     cmds:
       - mkdir -p {{.BIN_DIR}}
-      - go build -o {{.BIN_DIR}}/{{.LOGIC}} ./agent/{{.LOGIC}}/bundle
+      - go build -o {{.BIN_DIR}}/{{.LOGIC}} ./agent/{{.LOGIC}}
 
   build-opponent:
     desc: Build the baseline opponent into ./bin/opponent
