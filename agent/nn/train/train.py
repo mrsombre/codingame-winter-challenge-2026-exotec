@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import sys
+import time
 
+import mlx.core as mx
+import mlx.nn as nn
+import mlx.optimizers as optim
 import numpy as np
 
 from common import (
@@ -20,13 +26,29 @@ def train_trace_path():
     return traces_dir() / "opponent.jsonl.gz"
 
 
-def main() -> None:
-    rows = load_traces(train_trace_path())
+def cache_path(trace_file, max_rows, max_samples):
+    """Deterministic cache path based on trace file content and limits."""
+    h = hashlib.md5()
+    h.update(str(trace_file).encode())
+    h.update(str(os.path.getmtime(trace_file)).encode())
+    h.update(f"{max_rows}:{max_samples}".encode())
+    return artifacts_dir() / f"features_{h.hexdigest()[:12]}.npz"
+
+
+def load_or_extract(trace_file, max_rows, max_samples):
+    """Load cached features or extract from traces."""
+    cp = cache_path(trace_file, max_rows, max_samples)
+    if cp.exists():
+        print(f"cache hit: {cp.name}", file=sys.stderr)
+        data = np.load(cp, allow_pickle=True)
+        fixture = json.loads(str(data["fixture"])) if "fixture" in data else None
+        return data["X"], data["M"], data["y"], int(data["rows_used"]), fixture
+
+    print("extracting features …", file=sys.stderr)
+    t0 = time.time()
+    rows = load_traces(trace_file)
     samples = []
     fixture = None
-    max_rows = int(os.environ.get("NN_MAX_ROWS", "0"))
-    max_samples = int(os.environ.get("NN_MAX_SAMPLES", "0"))
-    epochs = int(os.environ.get("NN_EPOCHS", "8"))
     rows_used = 0
     for row in rows:
         if max_rows > 0 and rows_used >= max_rows:
@@ -49,69 +71,93 @@ def main() -> None:
             break
 
     if not samples:
-        raise SystemExit(f"no training samples in {train_trace_path()}")
+        raise SystemExit(f"no training samples in {trace_file}")
 
-    X = np.asarray([sample[0] for sample in samples], dtype=np.float32)
-    M = np.asarray([sample[1] for sample in samples], dtype=np.bool_)
-    y = np.asarray([sample[2] for sample in samples], dtype=np.int64)
+    X = np.asarray([s[0] for s in samples], dtype=np.float32)
+    M = np.asarray([s[1] for s in samples], dtype=np.bool_)
+    y = np.asarray([s[2] for s in samples], dtype=np.int32)
 
+    cp.parent.mkdir(parents=True, exist_ok=True)
+    fixture_str = json.dumps(fixture) if fixture else ""
+    np.savez(cp, X=X, M=M, y=y, rows_used=np.array(rows_used), fixture=np.array(fixture_str))
+    print(f"cached {len(X)} samples in {time.time()-t0:.1f}s -> {cp.name}", file=sys.stderr)
+    return X, M, y, rows_used, fixture
+
+
+class MLP(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(96, 160)
+        self.fc2 = nn.Linear(160, 96)
+        self.fc3 = nn.Linear(96, 1)
+
+    def __call__(self, x):
+        x = nn.relu(self.fc1(x))
+        x = nn.relu(self.fc2(x))
+        return self.fc3(x).squeeze(-1)
+
+
+def loss_fn(model, x, mask, y):
+    logits = model(x)
+    logits = mx.where(mask, logits, mx.array(-1e9, dtype=mx.float32))
+    log_probs = logits - mx.logsumexp(logits, axis=1, keepdims=True)
+    target_log_probs = mx.take_along_axis(log_probs, y[:, None], axis=1).squeeze(1)
+    return -mx.mean(target_log_probs)
+
+
+def main() -> None:
+    max_rows = int(os.environ.get("NN_MAX_ROWS", "0"))
+    max_samples = int(os.environ.get("NN_MAX_SAMPLES", "0"))
+    epochs = int(os.environ.get("NN_EPOCHS", "8"))
+
+    X_np, M_np, y_np, rows_used, fixture = load_or_extract(
+        train_trace_path(), max_rows, max_samples
+    )
+
+    # Initialize weights matching numpy version distribution
     rng = np.random.default_rng(7)
-    w1 = (rng.standard_normal((96, 160)) * 0.03).astype(np.float32)
-    b1 = np.zeros(160, dtype=np.float32)
-    w2 = (rng.standard_normal((160, 96)) * 0.03).astype(np.float32)
-    b2 = np.zeros(96, dtype=np.float32)
-    w3 = (rng.standard_normal((96, 1)) * 0.03).astype(np.float32)
-    b3 = np.zeros(1, dtype=np.float32)
+    model = MLP()
+    # nn.Linear weight shape: (out, in); numpy convention: (in, out)
+    model.fc1.weight = mx.array((rng.standard_normal((96, 160)) * 0.03).astype(np.float32).T)
+    model.fc1.bias = mx.zeros(160)
+    model.fc2.weight = mx.array((rng.standard_normal((160, 96)) * 0.03).astype(np.float32).T)
+    model.fc2.bias = mx.zeros(96)
+    model.fc3.weight = mx.array((rng.standard_normal((96, 1)) * 0.03).astype(np.float32).T)
+    model.fc3.bias = mx.zeros(1)
 
-    def softmax(logits):
-        shifted = logits - np.max(logits, axis=1, keepdims=True)
-        exps = np.exp(shifted)
-        return exps / np.sum(exps, axis=1, keepdims=True)
+    optimizer = optim.SGD(learning_rate=0.03)
+    loss_and_grad_fn = nn.value_and_grad(model, loss_fn)
 
-    for _ in range(epochs):
-        order = rng.permutation(len(X))
-        for start in range(0, len(X), 256):
-            idx = order[start : start + 256]
-            xb = X[idx]
-            mb = M[idx]
-            yb = y[idx]
+    X = mx.array(X_np)
+    M = mx.array(M_np)
+    y = mx.array(y_np)
 
-            h1 = np.maximum(0.0, xb @ w1 + b1)
-            h2 = np.maximum(0.0, h1 @ w2 + b2)
-            logits = (h2 @ w3 + b3).squeeze(-1)
-            logits = np.where(mb, logits, -1e9)
-            probs = softmax(logits)
+    t0 = time.time()
+    for epoch in range(epochs):
+        order = rng.permutation(len(X_np))
+        for start in range(0, len(X_np), 256):
+            batch_idx = mx.array(order[start : start + 256])
+            xb = X[batch_idx]
+            mb = M[batch_idx]
+            yb = y[batch_idx]
+            loss, grads = loss_and_grad_fn(model, xb, mb, yb)
+            optimizer.update(model, grads)
+            mx.eval(loss, model.parameters(), optimizer.state)
+    print(f"training: {time.time()-t0:.1f}s ({epochs} epochs)", file=sys.stderr)
 
-            dlogits = probs
-            dlogits[np.arange(len(yb)), yb] -= 1.0
-            dlogits /= len(yb)
-            dlogits = np.where(mb, dlogits, 0.0)
+    logits = model(X)
+    logits = mx.where(M, logits, mx.array(-1e9, dtype=mx.float32))
+    preds = mx.argmax(logits, axis=1)
+    mx.eval(preds)
+    train_acc = float(mx.mean(preds == y))
 
-            dw3 = np.sum(h2 * dlogits[..., None], axis=(0, 1), keepdims=True).reshape(96, 1)
-            db3 = np.sum(dlogits)
-            dh2 = dlogits[..., None] * w3.T
-            dh2[h2 <= 0] = 0
-            dw2 = np.tensordot(h1, dh2, axes=([0, 1], [0, 1]))
-            db2 = np.sum(dh2, axis=(0, 1))
-            dh1 = np.matmul(dh2, w2.T)
-            dh1[h1 <= 0] = 0
-            dw1 = np.tensordot(xb, dh1, axes=([0, 1], [0, 1]))
-            db1 = np.sum(dh1, axis=(0, 1))
-
-            lr = 0.03
-            w3 -= lr * dw3.astype(np.float32)
-            b3 -= lr * np.asarray([db3], dtype=np.float32)
-            w2 -= lr * dw2.astype(np.float32)
-            b2 -= lr * db2.astype(np.float32)
-            w1 -= lr * dw1.astype(np.float32)
-            b1 -= lr * db1.astype(np.float32)
-
-    h1 = np.maximum(0.0, X @ w1 + b1)
-    h2 = np.maximum(0.0, h1 @ w2 + b2)
-    logits = (h2 @ w3 + b3).squeeze(-1)
-    logits = np.where(M, logits, -1e9)
-    preds = np.argmax(logits, axis=1)
-    train_acc = float(np.mean(preds == y))
+    # Export weights (transpose back to numpy in/out convention)
+    w1 = np.array(model.fc1.weight.T)
+    b1 = np.array(model.fc1.bias)
+    w2 = np.array(model.fc2.weight.T)
+    b2 = np.array(model.fc2.bias)
+    w3 = np.array(model.fc3.weight.T)
+    b3 = np.array(model.fc3.bias)
 
     meta = emit_go_weights(
         [
@@ -132,11 +178,11 @@ def main() -> None:
             {
                 "teacher": "opponent",
                 "trace_path": str(train_trace_path()),
-                "samples": int(len(X)),
+                "samples": len(X_np),
                 "rows_used": rows_used,
                 "train_accuracy": train_acc,
                 "blob_chars": meta["blob_chars"],
-                "mode": "numpy",
+                "mode": "mlx",
                 "epochs": epochs,
             },
             indent=2,
@@ -153,11 +199,11 @@ def main() -> None:
         json.dumps(
             {
                 "teacher": "opponent",
-                "samples": int(len(X)),
+                "samples": len(X_np),
                 "rows_used": rows_used,
                 "train_accuracy": train_acc,
                 "blob_chars": meta["blob_chars"],
-                "mode": "numpy",
+                "mode": "mlx",
                 "epochs": epochs,
             },
             indent=2,

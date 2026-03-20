@@ -3,6 +3,7 @@ name = "nn-train"
 version = "0.1.0"
 requires-python = ">=3.11,<3.12"
 dependencies = [
+  "mlx>=0.22",
   "numpy>=1.26,<3",
   "pandas>=2.2,<3",
   "scipy>=1.13,<2",

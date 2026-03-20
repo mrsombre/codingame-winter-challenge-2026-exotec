@@ -3,10 +3,36 @@ revision = 3
 requires-python = "==3.11.*"
 
 [[package]]
+name = "mlx"
+version = "0.31.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mlx-metal", marker = "sys_platform == 'darwin'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/75/32/25dc2eae1d6f867224ef2bca2c644e3e913fe8067991f8394c090b720e3e/mlx-0.31.1-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:8863835fb36c7c4f65008b1426ddb9ff7931a13c975e0ef58a40002ae8048922", size = 574311, upload-time = "2026-03-12T02:16:02.651Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/bf/c5aa1d1154f5a216139c8162cd3e6568b7eb427390d655f7f5ae3a1a61e7/mlx-0.31.1-cp311-cp311-macosx_15_0_arm64.whl", hash = "sha256:0de504c1f1fe73b32fc3cf457b8eac30d1f7ce22440ef075c1970f96712e6fff", size = 574312, upload-time = "2026-03-12T02:16:04.231Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/88/ef57747552c9e9da0c28465d9266c05a0009b698d90fb0bc63eb81840b8d/mlx-0.31.1-cp311-cp311-macosx_26_0_arm64.whl", hash = "sha256:10715b895e1f3e984c2c54257b7db956ff8af1fa93255412794a3724fe2dd3b1", size = 574385, upload-time = "2026-03-12T02:16:05.528Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/51/dbea4bbe7a2e4cd05226965b34198d49459cfaef8b9b37b72f006a9811ab/mlx-0.31.1-cp311-cp311-manylinux_2_35_aarch64.whl", hash = "sha256:d065625ab3101adcd7f5824297243fe40a0615099a06f5597ab67284483aa2f8", size = 641347, upload-time = "2026-03-12T02:16:07.013Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/86/3db98e8805637fb56f078311d622e9500f5c9088f6d79a6e304ec8235b47/mlx-0.31.1-cp311-cp311-manylinux_2_35_x86_64.whl", hash = "sha256:b2cf8502d9d64dc6851034fcd4a656cbb26be20c36f190f2971f4ac0caed89cb", size = 674769, upload-time = "2026-03-12T02:16:08.51Z" },
+]
+
+[[package]]
+name = "mlx-metal"
+version = "0.31.1"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/39/66/2313497fdbc7fbadf8e026c09366e3f049f9114e65ca4edc23cdb8699186/mlx_metal-0.31.1-py3-none-macosx_14_0_arm64.whl", hash = "sha256:70741174131dbf7fdd479cb730e06e08c358eac3bf7905d9e884e7960cfdd5b8", size = 38624074, upload-time = "2026-03-12T02:15:48.036Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/34/4c3c6890ce6095b2ab2ba2f5f15c9a7ba17208d47f8cacb572885a2dc0eb/mlx_metal-0.31.1-py3-none-macosx_15_0_arm64.whl", hash = "sha256:6c56bd8cd27743e635f5a90a22535af7c31bd22b4b126d46b6da2da52d72e413", size = 38618950, upload-time = "2026-03-12T02:15:51.908Z" },
+    { url = "https://files.pythonhosted.org/packages/51/bc/987cb99e3aafb296aa11ce5133838a10eae8447edd53168d0804d4fb3a14/mlx_metal-0.31.1-py3-none-macosx_26_0_arm64.whl", hash = "sha256:e7324b7c56b519ae67c025d3ced07e5d35bc3a9f19d4c45fe4927f385148c59e", size = 49256543, upload-time = "2026-03-12T02:15:54.851Z" },
+]
+
+[[package]]
 name = "nn-train"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "mlx" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "scipy" },
@@ -14,6 +40,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "mlx", specifier = ">=0.22" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "pandas", specifier = ">=2.2,<3" },
     { name = "scipy", specifier = ">=1.13,<2" },
