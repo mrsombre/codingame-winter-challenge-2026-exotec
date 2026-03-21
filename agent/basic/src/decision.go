@@ -16,16 +16,16 @@ func srcScore(head, target Point) int {
 	return d
 }
 
-func calcDirInfo(body []Point, facing Direction, occupied *BitGrid) map[Direction]*DirInfo {
+func calcDirInfo(body []Point, facing Direction, occupied *BitGrid) [5]*DirInfo {
 	head := body[0]
-	info := make(map[Direction]*DirInfo, 3)
+	var info [5]*DirInfo
+	blocked := NewBG(W, H)
 	for _, dir := range state.VMoves(head, facing) {
 		nb, _, alive, _, _ := simMove(body, facing, dir, nil, occupied)
 		di := &DirInfo{alive: alive}
 		if alive {
 			di.body = make([]Point, len(nb))
 			copy(di.body, nb)
-			blocked := NewBG(W, H)
 			copy(blocked.Bits, occupied.Bits)
 			for _, p := range di.body[1:] {
 				blocked.Set(p)
@@ -37,9 +37,9 @@ func calcDirInfo(body []Point, facing Direction, occupied *BitGrid) map[Directio
 	return info
 }
 
-func isSafeDir(dir Direction, dirInfo map[Direction]*DirInfo, bodyLen int) bool {
-	di, ok := dirInfo[dir]
-	if !ok || !di.alive {
+func isSafeDir(dir Direction, dirInfo [5]*DirInfo, bodyLen int) bool {
+	di := dirInfo[dir]
+	if di == nil || !di.alive {
 		return false
 	}
 	thresh := bodyLen * 2
@@ -49,11 +49,12 @@ func isSafeDir(dir Direction, dirInfo map[Direction]*DirInfo, bodyLen int) bool 
 	return di.flood >= thresh
 }
 
-func bestSafeDir(dirInfo map[Direction]*DirInfo) (Direction, bool) {
+func bestSafeDir(dirInfo [5]*DirInfo) (Direction, bool) {
 	best := DirNone
 	bestFlood := -1
-	for dir, di := range dirInfo {
-		if di.alive && di.flood > bestFlood {
+	for dir := DirUp; dir <= DirLeft; dir++ {
+		di := dirInfo[dir]
+		if di != nil && di.alive && di.flood > bestFlood {
 			bestFlood = di.flood
 			best = dir
 		}
@@ -103,8 +104,29 @@ func hasFollowupEscape(body []Point, facing Direction, sources, occupied *BitGri
 	return false
 }
 
+func dangerPenalty(cell Point, bodyLen int, enemies []enemyInfo, basePen, shortPen, midPen, huntBonus int) int {
+	pen := basePen
+	if bodyLen <= 3 {
+		pen = shortPen
+	} else if bodyLen <= 5 {
+		pen = midPen
+	}
+	for _, e := range enemies {
+		evd, end := validDirs(e.facing)
+		for _, edir := range evd[:end] {
+			if Add(e.head, DirDelta[edir]) == cell {
+				if e.bodyLen <= 3 && bodyLen > 3 {
+					pen = huntBonus
+				}
+				break
+			}
+		}
+	}
+	return pen
+}
+
 func bestAction(body []Point, facing Direction, sources []Point,
-	dirInfo map[Direction]*DirInfo, enemies []enemyInfo, enemyDists []int,
+	dirInfo [5]*DirInfo, enemies []enemyInfo, enemyDists []int,
 	srcBG, occupied, danger *BitGrid) SearchResult {
 
 	if len(sources) == 0 {
@@ -180,26 +202,7 @@ func bestAction(body []Point, facing Direction, sources []Point,
 		}
 
 		if danger.Has(nb[0]) {
-			dangerPen := 20
-			if bodyLen <= 3 {
-				dangerPen = 500
-			} else if bodyLen <= 5 {
-				dangerPen = 100
-			}
-			for _, e := range enemies {
-				canReach := false
-				evd, end := validDirs(e.facing)
-				for _, edir := range evd[:end] {
-					if Add(e.head, DirDelta[edir]) == nb[0] {
-						canReach = true
-						break
-					}
-				}
-				if canReach && e.bodyLen <= 3 && bodyLen > 3 {
-					dangerPen = -500
-				}
-			}
-			score += dangerPen
+			score += dangerPenalty(nb[0], bodyLen, enemies, 20, 500, 100, -500)
 		}
 
 		if nb[0] == head {
@@ -252,7 +255,7 @@ func bestAction(body []Point, facing Direction, sources []Point,
 }
 
 func bestGroundAction(body []Point, facing Direction, target Point,
-	dirInfo map[Direction]*DirInfo, enemies []enemyInfo,
+	dirInfo [5]*DirInfo, enemies []enemyInfo,
 	srcBG, occupied, danger *BitGrid) SearchResult {
 
 	bodyLen := len(body)
@@ -285,26 +288,7 @@ func bestGroundAction(body []Point, facing Direction, target Point,
 		}
 
 		if danger.Has(nb[0]) {
-			dangerPen := 40
-			if bodyLen <= 3 {
-				dangerPen = 600
-			} else if bodyLen <= 5 {
-				dangerPen = 150
-			}
-			for _, e := range enemies {
-				canReach := false
-				evd2, end2 := validDirs(e.facing)
-				for _, edir := range evd2[:end2] {
-					if Add(e.head, DirDelta[edir]) == nb[0] {
-						canReach = true
-						break
-					}
-				}
-				if canReach && e.bodyLen <= 3 && bodyLen > 3 {
-					dangerPen = -400
-				}
-			}
-			score += dangerPen
+			score += dangerPenalty(nb[0], bodyLen, enemies, 40, 600, 150, -400)
 		}
 
 		if di != nil && di.alive {
