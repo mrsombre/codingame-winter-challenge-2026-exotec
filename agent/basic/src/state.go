@@ -32,15 +32,19 @@ func (b *fBody) contains(p Point) bool {
 }
 
 type State struct {
-	Grid   *AGrid
-	Terr   *STerrain
-	Apples BitGrid
-	MvBuf  [4]Direction
-	DistQ  []Point
+	Grid    *AGrid
+	Terr    *STerrain
+	Apples  BitGrid
+	MvBuf   [4]Direction
+	OobDirs [4]Direction // all 4 cardinal directions for OOB positions
+	DistQ   []Point
 }
 
 func NewState(grid *AGrid) State {
-	s := State{Grid: grid}
+	s := State{
+		Grid:    grid,
+		OobDirs: [4]Direction{DirUp, DirRight, DirDown, DirLeft},
+	}
 	if grid != nil {
 		n := grid.Width * grid.Height
 		s.Terr = NewSTerrain(grid)
@@ -51,6 +55,10 @@ func NewState(grid *AGrid) State {
 }
 func (s *State) VMoves(pos Point, facing Direction) []Direction {
 	dirs := s.Grid.CDirs(pos)
+	if dirs == nil && !s.Grid.InB(pos) {
+		// Head is out of bounds — no precomputed dirs, allow all 4.
+		dirs = s.OobDirs[:]
+	}
 	if facing == DirNone {
 		return dirs
 	}

@@ -45,7 +45,7 @@ func simMove(body []Point, facing, dir Direction, sources, occupied *BitGrid) ([
 		n += len(body) - 1
 	}
 
-	collision := grid.IsWall(nh) || (occupied != nil && occupied.Has(nh))
+	collision := grid.IsActualWall(nh) || (occupied != nil && occupied.Has(nh))
 	if !collision {
 		for k := 1; k < n; k++ {
 			if simBuf[k] == nh {
@@ -228,7 +228,7 @@ func simulateOneTurn(sc *refScratch, mine []botEntry, enemies []enemyInfo, ourDi
 			continue
 		}
 		head := bi.body.parts[0]
-		if grid.IsWall(head) {
+		if grid.IsActualWall(head) {
 			sc.toBehead[i] = true
 			continue
 		}
@@ -502,13 +502,13 @@ func isHeadLockedWorstCase(body []Point, facing, dir Direction, enemies []enemyI
 			copy(testOcc.Bits, baseOcc.Bits)
 			for ei, e := range nearbyEnemies {
 				nh := Add(e.head, DirDelta[eDirs[ei]])
-				if !grid.IsWall(nh) {
+				if !grid.IsActualWall(nh) {
 					testOcc.Set(nh)
 				}
 			}
 			for _, d := range state.VMoves(finalHead, nf) {
 				nh := Add(finalHead, DirDelta[d])
-				if !grid.IsWall(nh) && !testOcc.Has(nh) {
+				if !grid.IsActualWall(nh) && !testOcc.Has(nh) {
 					return
 				}
 			}

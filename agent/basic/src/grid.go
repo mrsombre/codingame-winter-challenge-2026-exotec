@@ -122,6 +122,17 @@ func (g *AGrid) IsWall(p Point) bool {
 	}
 	return g.Walls.Has(p)
 }
+
+// IsActualWall returns true only for in-bounds wall tiles, matching the
+// engine's collision check (Grid.Get returns NoTile for OOB with Type=-1,
+// which is NOT TileWall). Moving the head out of bounds is legal as long
+// as the snake still has support.
+func (g *AGrid) IsActualWall(p Point) bool {
+	if !g.InB(p) {
+		return false
+	}
+	return g.Walls.Has(p)
+}
 func (g *AGrid) WBelow(p Point) bool { return g.WallBl.Has(p) }
 func (g *AGrid) CDirs(pos Point) []Direction {
 	if !g.InB(pos) || g.IsWall(pos) {

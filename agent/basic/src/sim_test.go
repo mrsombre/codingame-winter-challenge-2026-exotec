@@ -320,3 +320,177 @@ func TestOutcomeRisk(t *testing.T) {
 		t.Errorf("our death should dominate even with enemy death, got %d", riskBoth)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Head out of bounds — the engine allows the head to be outside the arena
+// horizontally (X < 0 or X >= W) as long as the snake still has support.
+// ---------------------------------------------------------------------------
+
+// oobLeftGrid has NO wall on the left border, a wall at (1,1) blocking
+// rightward movement from the head position, and a floor at the bottom.
+//
+//	........   y=0
+//	.#......   y=1
+//	........   y=2
+//	........   y=3
+//	########   y=4
+var oobLeftGrid = []string{
+	"........",
+	".#......",
+	"........",
+	"........",
+	"########",
+}
+
+// TestSimMoveHeadOOBLeft verifies that a snake can move its head to X=-1
+// (out of bounds) without dying, as long as the remaining body has support.
+// The engine treats OOB as "not a wall" — only in-bounds wall tiles cause
+// beheading.
+func TestSimMoveHeadOOBLeft(t *testing.T) {
+	setupGrid(oobLeftGrid)
+	// Snake standing vertically at X=0, head at (0,1), body (0,2), tail (0,3).
+	// Facing UP. Wall at (1,1) blocks rightward movement.
+	body := []Point{{0, 1}, {0, 2}, {0, 3}}
+	facing := DirUp
+	occ := setupOcc(nil)
+
+	// Move LEFT → head goes to (-1,1), which is OOB but not a wall.
+	nb, _, alive, _, _ := simMove(body, facing, DirLeft, nil, &occ)
+	if !alive {
+		t.Fatal("snake should survive moving head OOB left")
+	}
+	// After gravity the snake falls until tail rests on floor (y=4 wall).
+	// Expected landing: head (-1,2), body (0,2), tail (0,3).
+	if nb[0].X != -1 {
+		t.Errorf("head X = %d, want -1 (OOB)", nb[0].X)
+	}
+	// Tail should be resting just above floor.
+	lastPart := nb[len(nb)-1]
+	if lastPart.Y != 3 {
+		t.Errorf("tail Y = %d, want 3 (above floor)", lastPart.Y)
+	}
+}
+
+// TestSimMoveHeadOOBRight verifies the same behavior on the right side.
+//
+//	........   y=0
+//	......#.   y=1  wall at (6,1)
+//	........   y=2
+//	........   y=3
+//	########   y=4
+var oobRightGrid = []string{
+	"........",
+	"......#.",
+	"........",
+	"........",
+	"########",
+}
+
+func TestSimMoveHeadOOBRight(t *testing.T) {
+	setupGrid(oobRightGrid)
+	// Snake at X=7 (rightmost open column), head at (7,1), facing UP.
+	body := []Point{{7, 1}, {7, 2}, {7, 3}}
+	facing := DirUp
+	occ := setupOcc(nil)
+
+	// Move RIGHT → head goes to (8,1), which is OOB (X >= W).
+	nb, _, alive, _, _ := simMove(body, facing, DirRight, nil, &occ)
+	if !alive {
+		t.Fatal("snake should survive moving head OOB right")
+	}
+	if nb[0].X != 8 {
+		t.Errorf("head X = %d, want 8 (OOB right)", nb[0].X)
+	}
+}
+
+// TestSimMoveOOBEscapeSequence verifies the full escape path described in
+// the issue: a snake trapped at X=0 with a wall to its right can escape
+// by moving the head OOB left, then maneuvering back in-bounds.
+//
+// Note: simMove returns a slice of a shared buffer, so we must copy the
+// body between calls.
+func TestSimMoveOOBEscapeSequence(t *testing.T) {
+	setupGrid(oobLeftGrid)
+	body := []Point{{0, 1}, {0, 2}, {0, 3}}
+	facing := DirUp
+	occ := setupOcc(nil)
+
+	copyBody := func(b []Point) []Point {
+		c := make([]Point, len(b))
+		copy(c, b)
+		return c
+	}
+
+	// Step 1: Move LEFT → head OOB
+	nb, nf, alive, _, _ := simMove(body, facing, DirLeft, nil, &occ)
+	if !alive {
+		t.Fatal("step 1 (LEFT): should survive")
+	}
+	nb = copyBody(nb)
+
+	// Step 2: Move UP from OOB position
+	nb2, nf2, alive2, _, _ := simMove(nb, nf, DirUp, nil, &occ)
+	if !alive2 {
+		t.Fatal("step 2 (UP): should survive")
+	}
+	nb2 = copyBody(nb2)
+
+	// Step 3: Move RIGHT → head back in-bounds
+	nb3, nf3, alive3, _, _ := simMove(nb2, nf2, DirRight, nil, &occ)
+	if !alive3 {
+		t.Fatal("step 3 (RIGHT): should survive")
+	}
+	nb3 = copyBody(nb3)
+
+	// Step 4: Move RIGHT again → fully free
+	nb4, _, alive4, _, _ := simMove(nb3, nf3, DirRight, nil, &occ)
+	if !alive4 {
+		t.Fatal("step 4 (RIGHT): should survive")
+	}
+
+	// Final head should be in-bounds with X >= 1.
+	if nb4[0].X < 1 {
+		t.Errorf("final head X = %d, want >= 1 (back in bounds, free)", nb4[0].X)
+	}
+}
+
+// TestVMovesOOBHead verifies that VMoves returns valid directions when
+// the head is at an out-of-bounds position.
+func TestVMovesOOBHead(t *testing.T) {
+	setupGrid(oobLeftGrid)
+	pos := Point{-1, 2} // OOB left
+	facing := DirLeft
+
+	dirs := state.VMoves(pos, facing)
+	if len(dirs) == 0 {
+		t.Fatal("VMoves should return directions for OOB head position")
+	}
+	// Should have 3 directions (all except backward = DirRight)
+	if len(dirs) != 3 {
+		t.Errorf("VMoves returned %d directions, want 3 (all except backward)", len(dirs))
+	}
+	// Should NOT contain the backward direction (DirRight is opposite of DirLeft)
+	for _, d := range dirs {
+		if d == DirRight {
+			t.Error("VMoves should not contain backward direction (DirRight)")
+		}
+	}
+}
+
+// TestSimulateOneTurnOOBNotBeheaded verifies that the full turn simulation
+// does NOT behead a snake whose head is out of bounds (matching engine).
+func TestSimulateOneTurnOOBNotBeheaded(t *testing.T) {
+	setupGrid(oobLeftGrid)
+	mine := []botEntry{
+		{id: 0, body: []Point{{0, 1}, {0, 2}, {0, 3}}},
+	}
+	sources := []Point{}
+
+	outcome := simulateOneTurn(&rsc, mine, nil, []Direction{DirLeft}, nil, sources)
+	if outcome.deaths[0] != 0 {
+		t.Error("snake moving head OOB should NOT die (engine allows it)")
+	}
+	if outcome.losses[0] != 0 {
+		t.Errorf("no losses expected, got %d", outcome.losses[0])
+	}
+}
