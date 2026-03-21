@@ -1872,7 +1872,7 @@ func limitedSupportTargets(targets []Point) []Point {
 }
 
 func planSupportJobs(mine []botEntry, preferred [][]Point, sources []Point, botDists [][]int, deadline time.Time) map[int]supportJob {
-	if len(mine) < 2 || len(sources) == 0 || time.Until(deadline) < 18*time.Millisecond {
+	if len(mine) < 2 || len(sources) == 0 || time.Until(deadline) < 20*time.Millisecond {
 		return nil
 	}
 
@@ -2169,7 +2169,7 @@ func main() {
 			}
 		}
 
-		budget := 45 * time.Millisecond
+		budget := 40 * time.Millisecond
 		if turn == 0 {
 			budget = 900 * time.Millisecond
 		}
@@ -2253,7 +2253,6 @@ func main() {
 		supportJobs := planSupportJobs(mine, vsrc, sources, botDists, turnDeadline)
 
 		plans := make([]botPlan, 0, len(mine))
-		savedDirInfo := make([]map[Direction]*DirInfo, len(mine))
 		plannedHeads := NewBG(W, H)
 
 		for botIdx, bot := range mine {
@@ -2269,7 +2268,6 @@ func main() {
 			}
 
 			dirInfo := calcDirInfo(body, facing, &otherOcc)
-			savedDirInfo[botIdx] = dirInfo
 
 			_, myDists := cmdFlood(body, facing, &otherOcc)
 
@@ -2319,10 +2317,12 @@ func main() {
 					maxDepth = 20
 				}
 				remaining := time.Until(turnDeadline)
-				if remaining < 15*time.Millisecond {
+				if remaining < 8*time.Millisecond {
 					maxDepth = 4
-				} else if remaining < 25*time.Millisecond {
+				} else if remaining < 15*time.Millisecond {
 					maxDepth = 6
+				} else if remaining < 22*time.Millisecond {
+					maxDepth = 10
 				}
 
 				plan = cmdBFS(body, facing, competitive, maxDepth, dirInfo, enemyDists, &srcBG, &otherOcc, turnDeadline)
@@ -2430,91 +2430,61 @@ func main() {
 			plannedHeads.Set(Add(head, DirDelta[plan.dir]))
 		}
 
-		// Joint move search: try all combinations of valid moves across bots.
-		// Pick the combo that maximizes total flood + eating with no friendly collisions.
-		if len(plans) >= 2 && time.Until(turnDeadline) > 5*time.Millisecond {
-			type jOpt struct {
-				dir   Direction
-				head  Point
-				flood int
-				eat   bool
-			}
-			srcBGJ := NewBG(W, H)
-			fillBG(&srcBGJ, sources)
-
-			botOpts := make([][]jOpt, len(plans))
-			for i, p := range plans {
-				di := savedDirInfo[i]
-				head := p.body[0]
-				for dir, info := range di {
-					if info == nil || !info.alive {
+		// Opponent-aware plan refinement: predict enemy next moves, recheck our
+		// plans with the predicted board. If flood drops below safe threshold,
+		// switch to a safer direction. Time-guarded per bot.
+		if time.Until(turnDeadline) > 10*time.Millisecond {
+			predOcc := NewBG(W, H)
+			copy(predOcc.Bits, allOcc.Bits)
+			for _, e := range enemies {
+				bestDir := e.facing
+				bestDist := Unreachable
+				dirs, nd := validDirs(e.facing)
+				for _, dir := range dirs[:nd] {
+					nh := Add(e.head, DirDelta[dir])
+					if grid.IsWall(nh) || allOcc.Has(nh) {
 						continue
 					}
-					nh := Add(head, DirDelta[dir])
-					botOpts[i] = append(botOpts[i], jOpt{
-						dir: dir, head: nh, flood: info.flood, eat: srcBGJ.Has(nh),
-					})
-				}
-				if len(botOpts[i]) == 0 {
-					botOpts[i] = []jOpt{{dir: p.dir, head: Add(head, DirDelta[p.dir])}}
-				}
-			}
-
-			// Enumerate all combos
-			combo := make([]int, len(plans))
-			bestScore := -1 << 30
-			bestDirs := make([]Direction, len(plans))
-			for i := range bestDirs {
-				bestDirs[i] = plans[i].dir
-			}
-
-			for {
-				score := 0
-				headCount := make(map[Point]int, len(plans))
-				for i := range plans {
-					opt := botOpts[i][combo[i]]
-					// Strong preference for keeping individual plan
-					if opt.dir == plans[i].dir {
-						score += 10000
-					}
-					score += opt.flood
-					if opt.eat {
-						score += 5000
-					}
-					headCount[opt.head]++
-				}
-				for _, cnt := range headCount {
-					if cnt > 1 {
-						score -= cnt * 20000
+					for _, s := range sources {
+						if d := MDist(nh, s); d < bestDist {
+							bestDist = d
+							bestDir = dir
+						}
 					}
 				}
-
-				if score > bestScore {
-					bestScore = score
-					for i := range plans {
-						bestDirs[i] = botOpts[i][combo[i]].dir
-					}
-				}
-
-				// Increment combo (odometer)
-				carry := true
-				for i := len(plans) - 1; i >= 0 && carry; i-- {
-					combo[i]++
-					if combo[i] < len(botOpts[i]) {
-						carry = false
-					} else {
-						combo[i] = 0
-					}
-				}
-				if carry {
-					break
+				ph := Add(e.head, DirDelta[bestDir])
+				if !grid.IsWall(ph) {
+					predOcc.Set(ph)
 				}
 			}
 
 			for i := range plans {
-				if plans[i].dir != bestDirs[i] {
-					plans[i].dir = bestDirs[i]
-					plans[i].reason = "joint"
+				if time.Until(turnDeadline) < 5*time.Millisecond {
+					break
+				}
+				body := plans[i].body
+				facing := plans[i].facing
+				bodyLen := len(body)
+				myOcc := occExcept(&predOcc, body)
+				predDI := calcDirInfo(body, facing, &myOcc)
+				di := predDI[plans[i].dir]
+				if di != nil && di.alive && di.flood >= bodyLen*2 {
+					continue
+				}
+				bestDir := plans[i].dir
+				bestFlood := 0
+				if di != nil && di.alive {
+					bestFlood = di.flood
+				}
+				for dir, info := range predDI {
+					if info != nil && info.alive && info.flood > bestFlood {
+						bestFlood = info.flood
+						bestDir = dir
+					}
+				}
+				if bestDir != plans[i].dir && bestFlood >= bodyLen*2 {
+					plans[i].dir = bestDir
+					plans[i].reason = "pred"
 				}
 			}
 		}
