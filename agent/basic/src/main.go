@@ -159,8 +159,45 @@ func main() {
 		}
 		mine = sortedMine
 
+		// --- TACTICAL LAYER: reserve close apples to nearest bot ---
+		const tacticalThresh = 3
+		tacticalSrc := make([][]Point, len(mine))
+		tacticalApple := NewBG(W, H)
+
+		// For each apple reachable by ANY bot within threshold,
+		// reserve it to the closest bot exclusively.
+		for _, s := range sources {
+			si := s.Y*W + s.X
+			bestBot := -1
+			bestDist := Unreachable
+			for i := range mine {
+				d := botDists[i][si]
+				if d < bestDist {
+					bestDist = d
+					bestBot = i
+				}
+			}
+			if bestBot >= 0 && bestDist >= 1 && bestDist <= tacticalThresh {
+				ed := enemyDists[si]
+				if ed == Unreachable || bestDist <= ed {
+					tacticalSrc[bestBot] = append(tacticalSrc[bestBot], s)
+					tacticalApple.Set(s)
+				}
+			}
+		}
+		for i := range tacticalSrc {
+			bd := botDists[i]
+			sort.Slice(tacticalSrc[i], func(a, b int) bool {
+				return bd[tacticalSrc[i][a].Y*W+tacticalSrc[i][a].X] < bd[tacticalSrc[i][b].Y*W+tacticalSrc[i][b].X]
+			})
+		}
+
+		// --- STRATEGIC LAYER: voronoi for remaining apples ---
 		vsrc := make([][]Point, len(mine))
 		for _, s := range sources {
+			if tacticalApple.Has(s) {
+				continue // reserved by tactical layer
+			}
 			si := s.Y*W + s.X
 			bestBot := -1
 			bestDist := Unreachable
@@ -235,7 +272,10 @@ func main() {
 				}
 			}
 
-			available := vsrc[botIdx]
+			// Tactical targets first, then voronoi strategic targets.
+			available := make([]Point, 0, len(tacticalSrc[botIdx])+len(vsrc[botIdx]))
+			available = append(available, tacticalSrc[botIdx]...)
+			available = append(available, vsrc[botIdx]...)
 			if len(available) == 0 {
 				available = sources
 			}
