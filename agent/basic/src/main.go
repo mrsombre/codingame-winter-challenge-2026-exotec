@@ -340,8 +340,9 @@ func main() {
 			if grid.IsWall(nextHead) || otherOcc.Has(nextHead) {
 				bestDir := DirNone
 				bestFlood := -1
-				for dir, di := range dirInfo {
-					if !di.alive {
+				for dir := DirUp; dir <= DirLeft; dir++ {
+					di := dirInfo[dir]
+					if di == nil || !di.alive {
 						continue
 					}
 					t := Add(head, DirDelta[dir])
@@ -360,7 +361,7 @@ func main() {
 			}
 
 			if !isInstantEat {
-				if di, ok := dirInfo[plan.dir]; ok && di.alive {
+				if di := dirInfo[plan.dir]; di != nil && di.alive {
 					if di.flood < bodyLen+2 {
 						if bs, ok := bestSafeDir(dirInfo); ok && dirInfo[bs].flood >= bodyLen*3 {
 							plan.dir = bs
@@ -448,7 +449,8 @@ func main() {
 				if di != nil && di.alive {
 					bestFlood = di.flood
 				}
-				for dir, info := range predDI {
+				for dir := DirUp; dir <= DirLeft; dir++ {
+					info := predDI[dir]
 					if info != nil && info.alive && info.flood > bestFlood {
 						bestFlood = info.flood
 						bestDir = dir

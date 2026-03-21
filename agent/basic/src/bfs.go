@@ -105,7 +105,7 @@ func stateHash(facing Direction, body []Point) uint64 {
 }
 
 func cmdBFS(body []Point, facing Direction, sources []Point,
-	maxDepth int, dirInfo map[Direction]*DirInfo, enemyDists []int,
+	maxDepth int, dirInfo [5]*DirInfo, enemyDists []int,
 	srcBG, occupied *BitGrid, deadline time.Time) SearchResult {
 
 	if len(sources) == 0 {
@@ -182,7 +182,7 @@ func cmdBFS(body []Point, facing Direction, sources []Point,
 				rawSteps := item.depth + 1
 				score := rawSteps * 1000
 				score += srcScore(body[0], eatenAt)
-				if di, ok := dirInfo[first]; ok && di.alive && rawSteps == 1 {
+				if di := dirInfo[first]; di != nil && di.alive && rawSteps == 1 {
 					if di.flood < bodyLen*2 {
 						score += 3000
 					} else if di.flood < bodyLen*3 {
