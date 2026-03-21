@@ -42,18 +42,18 @@ func TestIsSafeDir(t *testing.T) {
 }
 
 // TestIsSafeDirMinThreshold verifies the minimum threshold of 4 for very
-// short snakes.  A length-1 snake has 2×1=2, but the code clamps to 4.
+// short snakes.  A length-1 snake has 2×1=2, but the code clamps to 6.
 func TestIsSafeDirMinThreshold(t *testing.T) {
 	var info [5]*DirInfo
-	info[DirUp] = &DirInfo{flood: 3, alive: true}
+	info[DirUp] = &DirInfo{flood: 5, alive: true}
 
-	// bodyLen=1 → threshold = max(2, 4) = 4; flood=3 < 4 → unsafe.
+	// bodyLen=1 → threshold = max(2, 6) = 6; flood=5 < 6 → unsafe.
 	if isSafeDir(DirUp, info, 1) {
-		t.Error("flood=3 should be unsafe for bodyLen=1 (min threshold=4)")
+		t.Error("flood=5 should be unsafe for bodyLen=1 (min threshold=6)")
 	}
-	info[DirUp].flood = 4
+	info[DirUp].flood = 6
 	if !isSafeDir(DirUp, info, 1) {
-		t.Error("flood=4 should be safe for bodyLen=1")
+		t.Error("flood=6 should be safe for bodyLen=1")
 	}
 }
 
