@@ -38,6 +38,8 @@ type State struct {
 	MvBuf   [4]Direction
 	OobDirs [4]Direction // all 4 cardinal directions for OOB positions
 	DistQ   []Point
+	// Distance array pool to avoid per-BFS allocations.
+	distPool [][]int
 }
 
 func NewState(grid *AGrid) State {
@@ -50,8 +52,34 @@ func NewState(grid *AGrid) State {
 		s.Terr = NewSTerrain(grid)
 		s.Apples = NewBG(grid.Width, grid.Height)
 		s.DistQ = make([]Point, 0, n)
+		// Pre-allocate pool of distance arrays
+		s.distPool = make([][]int, 0, 16)
 	}
 	return s
+}
+
+// GetDist returns a distance array from the pool, or allocates a new one.
+// The caller must call PutDist when done (unless the array is stored long-term).
+func (s *State) GetDist() []int {
+	n := s.Grid.Width * s.Grid.Height
+	if len(s.distPool) > 0 {
+		d := s.distPool[len(s.distPool)-1]
+		s.distPool = s.distPool[:len(s.distPool)-1]
+		for i := range d {
+			d[i] = Unreachable
+		}
+		return d
+	}
+	d := make([]int, n)
+	for i := range d {
+		d[i] = Unreachable
+	}
+	return d
+}
+
+// PutDist returns a distance array to the pool for reuse.
+func (s *State) PutDist(d []int) {
+	s.distPool = append(s.distPool, d)
 }
 func (s *State) VMoves(pos Point, facing Direction) []Direction {
 	dirs := s.Grid.CDirs(pos)

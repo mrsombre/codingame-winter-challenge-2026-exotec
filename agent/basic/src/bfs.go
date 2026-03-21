@@ -3,11 +3,7 @@ package main
 import "time"
 
 func floodDist(start Point, blocked *BitGrid) (int, []int) {
-	n := W * H
-	dist := make([]int, n)
-	for i := range dist {
-		dist[i] = Unreachable
-	}
+	dist := state.GetDist()
 	if grid.IsWall(start) || (blocked != nil && blocked.Has(start)) {
 		return 0, dist
 	}
@@ -15,13 +11,15 @@ func floodDist(start Point, blocked *BitGrid) (int, []int) {
 	q := state.DistQ[:0]
 	q = append(q, start)
 	count := 0
+	wp := grid.WallPad
+	padW := grid.PadW
 	for i := 0; i < len(q); i++ {
 		p := q[i]
 		count++
 		d := dist[p.Y*W+p.X]
 		for dir := DirUp; dir <= DirLeft; dir++ {
 			np := Add(p, DirDelta[dir])
-			if grid.IsWall(np) {
+			if wp[(np.Y+1)*padW+(np.X+1)] {
 				continue
 			}
 			ni := np.Y*W + np.X
@@ -38,10 +36,7 @@ func floodDist(start Point, blocked *BitGrid) (int, []int) {
 
 func cmdFlood(body []Point, facing Direction, occupied *BitGrid) (int, []int) {
 	n := W * H
-	dist := make([]int, n)
-	for i := range dist {
-		dist[i] = Unreachable
-	}
+	dist := state.GetDist()
 	head := body[0]
 	if grid.IsWall(head) || (occupied != nil && occupied.Has(head)) {
 		return 0, dist
@@ -70,13 +65,15 @@ func cmdFlood(body []Point, facing Direction, occupied *BitGrid) (int, []int) {
 		q = append(q, l.pos)
 	}
 	count := 0
+	wp := grid.WallPad
+	padW := grid.PadW
 	for i := 0; i < len(q); i++ {
 		p := q[i]
 		count++
 		d := dist[p.Y*W+p.X]
 		for dir := DirUp; dir <= DirLeft; dir++ {
 			np := Add(p, DirDelta[dir])
-			if grid.IsWall(np) {
+			if wp[(np.Y+1)*padW+(np.X+1)] {
 				continue
 			}
 			ni := np.Y*W + np.X
@@ -112,13 +109,22 @@ func cmdBFS(body []Point, facing Direction, sources []Point,
 		return SearchResult{}
 	}
 
-	appleIdx := make(map[Point]int, len(sources))
+	// Flat array for O(1) apple index lookup instead of map.
+	n := W * H
+	appleFlat := state.GetDist() // reuse pool; values will be -1 (we use Unreachable as sentinel)
+	for i := range appleFlat {
+		appleFlat[i] = -1
+	}
 	for i, s := range sources {
 		if i >= 64 {
 			break
 		}
-		appleIdx[s] = i
+		si := s.Y*W + s.X
+		if si >= 0 && si < n {
+			appleFlat[si] = i
+		}
 	}
+	defer state.PutDist(appleFlat)
 
 	type qItem struct {
 		body     []Point
@@ -150,8 +156,11 @@ func cmdBFS(body []Point, facing Direction, sources []Point,
 
 		var restored []Point
 		if item.eatenSet != 0 {
-			for s, idx := range appleIdx {
-				if item.eatenSet&(1<<uint(idx)) != 0 {
+			for i, s := range sources {
+				if i >= 64 {
+					break
+				}
+				if item.eatenSet&(1<<uint(i)) != 0 {
 					if srcBG.Has(s) {
 						srcBG.Clear(s)
 						restored = append(restored, s)
@@ -175,8 +184,10 @@ func cmdBFS(body []Point, facing Direction, sources []Point,
 				if !hasFollowupEscape(nb, nf, srcBG, occupied, eatenAt) {
 					continue
 				}
-				if idx, ok := appleIdx[eatenAt]; ok {
-					newEaten |= 1 << uint(idx)
+				if ai := eatenAt.Y*W + eatenAt.X; ai >= 0 && ai < n {
+					if idx := appleFlat[ai]; idx >= 0 {
+						newEaten |= 1 << uint(idx)
+					}
 				}
 
 				rawSteps := item.depth + 1

@@ -183,7 +183,7 @@ func (t *STerrain) CMinLen() {
 				}
 				for dir := DirUp; dir <= DirLeft; dir++ {
 					next := Add(cur.p, DirDelta[dir])
-					if t.Grid.IsWall(next) {
+					if t.Grid.IsWallFast(next) {
 						continue
 					}
 					nr := cur.r + 1
@@ -267,7 +267,7 @@ func (t *STerrain) MinImmLen(supCell, target Point, apples *BitGrid) (int, int) 
 			}
 			for dir := DirUp; dir <= DirLeft; dir++ {
 				next := Add(cur.Pos, DirDelta[dir])
-				if t.Grid.IsWall(next) {
+				if t.Grid.IsWallFast(next) {
 					continue
 				}
 				nr := cur.Run + 1
@@ -331,7 +331,7 @@ func (t *STerrain) SupPathBFS(start Point, initRun int, target Point, apples *Bi
 			}
 			for dir := DirUp; dir <= DirLeft; dir++ {
 				next := Add(cur.Pos, DirDelta[dir])
-				if t.Grid.IsWall(next) {
+				if t.Grid.IsWallFast(next) {
 					continue
 				}
 				nr := cur.Run + 1
@@ -412,7 +412,7 @@ func (t *STerrain) SupReachMulti(start Point, initRun, maxBodyLen int, targets [
 					}
 				}
 
-				if g.IsWall(next) {
+				if g.IsWallFast(next) {
 					continue
 				}
 				nr := cur.Run + 1

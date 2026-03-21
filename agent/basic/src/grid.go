@@ -79,18 +79,37 @@ type AGrid struct {
 	Width, Height int
 	Walls, WallBl BitGrid
 	CellDirs      [][]Direction
+	// Padded wall lookup: (W+2)*(H+2) flat bool array.
+	// Index as WallPad[(y+1)*PadW+(x+1)]; border cells are true (wall).
+	// Allows branch-free wall checks in BFS without OOB guards.
+	WallPad []bool
+	PadW    int // Width + 2
 }
 
 func NewAG(width, height int, walls map[Point]bool) *AGrid {
+	padW := width + 2
+	padH := height + 2
 	g := &AGrid{
 		Width: width, Height: height,
 		Walls:    NewBG(width, height),
 		WallBl:   NewBG(width, height),
 		CellDirs: make([][]Direction, width*height),
+		WallPad:  make([]bool, padW*padH),
+		PadW:     padW,
+	}
+	// Fill border as walls
+	for i := range g.WallPad {
+		g.WallPad[i] = true
+	}
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			g.WallPad[(y+1)*padW+(x+1)] = false
+		}
 	}
 	for p := range walls {
 		if g.InB(p) {
 			g.Walls.Set(p)
+			g.WallPad[(p.Y+1)*padW+(p.X+1)] = true
 		}
 	}
 	for y := 0; y < height; y++ {
@@ -112,6 +131,12 @@ func NewAG(width, height int, walls map[Point]bool) *AGrid {
 		}
 	}
 	return g
+}
+
+// IsWallFast checks the padded wall array — no bounds check needed.
+// Valid for any coordinate including OOB within ±1 of the grid.
+func (g *AGrid) IsWallFast(p Point) bool {
+	return g.WallPad[(p.Y+1)*g.PadW+(p.X+1)]
 }
 func (g *AGrid) InB(p Point) bool {
 	return p.X >= 0 && p.X < g.Width && p.Y >= 0 && p.Y < g.Height
