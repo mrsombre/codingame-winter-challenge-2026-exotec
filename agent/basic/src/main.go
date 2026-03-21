@@ -241,6 +241,23 @@ func main() {
 
 			dirInfo := calcDirInfo(body, facing, &otherOcc)
 
+			// If all directions are dead with plannedHeads, relax the constraint.
+			// A potential friendly collision is better than certain death.
+			allDead := true
+			for dir := DirUp; dir <= DirLeft; dir++ {
+				if di := dirInfo[dir]; di != nil && di.alive {
+					allDead = false
+					break
+				}
+			}
+			if allDead {
+				otherOcc = occExcept(&allOcc, body)
+				for i := range otherOcc.Bits {
+					otherOcc.Bits[i] |= enemyWalls.Bits[i]
+				}
+				dirInfo = calcDirInfo(body, facing, &otherOcc)
+			}
+
 			_, myDists := cmdFlood(body, facing, &otherOcc)
 
 			srcBG := NewBG(W, H)
@@ -340,6 +357,7 @@ func main() {
 			if grid.IsWall(nextHead) || otherOcc.Has(nextHead) {
 				bestDir := DirNone
 				bestFlood := -1
+				// Level 1: prefer alive directions not in otherOcc
 				for dir := DirUp; dir <= DirLeft; dir++ {
 					di := dirInfo[dir]
 					if di == nil || !di.alive {
@@ -352,6 +370,29 @@ func main() {
 					if di.flood > bestFlood {
 						bestFlood = di.flood
 						bestDir = dir
+					}
+				}
+				// Level 2: accept alive directions even if in otherOcc (friendly collision)
+				if bestDir == DirNone {
+					for dir := DirUp; dir <= DirLeft; dir++ {
+						di := dirInfo[dir]
+						if di == nil || !di.alive {
+							continue
+						}
+						if di.flood > bestFlood {
+							bestFlood = di.flood
+							bestDir = dir
+						}
+					}
+				}
+				// Level 3: any non-wall direction (survive beheading if length > 3)
+				if bestDir == DirNone {
+					for dir := DirUp; dir <= DirLeft; dir++ {
+						t := Add(head, DirDelta[dir])
+						if !grid.IsWall(t) {
+							bestDir = dir
+							break
+						}
 					}
 				}
 				if bestDir != DirNone {
@@ -498,6 +539,22 @@ func main() {
 							plans[i].reason = "fix"
 							break
 						}
+					}
+				}
+			}
+		}
+
+		// Final wall-death guard: never send a short snake into a wall.
+		for i := range plans {
+			body := plans[i].body
+			nh := Add(body[0], DirDelta[plans[i].dir])
+			if grid.IsWall(nh) && len(body) <= 3 {
+				for d := DirUp; d <= DirLeft; d++ {
+					alt := Add(body[0], DirDelta[d])
+					if !grid.IsWall(alt) {
+						plans[i].dir = d
+						plans[i].reason = "nowall"
+						break
 					}
 				}
 			}

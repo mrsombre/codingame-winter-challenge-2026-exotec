@@ -43,8 +43,8 @@ func isSafeDir(dir Direction, dirInfo [5]*DirInfo, bodyLen int) bool {
 		return false
 	}
 	thresh := bodyLen * 2
-	if thresh < 4 {
-		thresh = 4
+	if thresh < 6 {
+		thresh = 6
 	}
 	return di.flood >= thresh
 }
