@@ -34,7 +34,7 @@ tasks:
     silent: true
     cmds:
       - mkdir -p {{.BIN_DIR}}
-      - go build -o {{.BIN_DIR}}/{{.LOGIC}} ./agent/{{.LOGIC}}
+      - go build -o {{.BIN_DIR}}/{{.LOGIC}} ./agent/{{.LOGIC}}/src
 
   build-opponent:
     desc: Build the baseline opponent into ./bin/opponent
